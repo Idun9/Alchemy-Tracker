@@ -466,9 +466,11 @@ local displayGroup = "ELIXIR"
 
 local function CreateUI()
     -- Main frame: movable, draggable, clamped to screen.
-    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent)
+    -- "BackdropTemplate" is included so SetBackdrop works on all TBC client builds.
+    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
     f:SetSize(370, 268)
     f:SetPoint("CENTER")
+    f:SetFrameStrata("MEDIUM")
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -477,8 +479,6 @@ local function CreateUI()
     f:SetClampedToScreen(true)
 
     -- Background + border.
-    -- SetBackdrop is a native Frame method in TBC Classic (2.x) clients.
-    -- It was moved to BackdropTemplateMixin in Shadowlands (9.x) — not relevant here.
     f:SetBackdrop({
         bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
