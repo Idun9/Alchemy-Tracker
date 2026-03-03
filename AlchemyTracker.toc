@@ -1,9 +1,10 @@
 ## Interface: 20500
-## Title: Alchemy Proc Tracker
+## Title: Alchemy Tracker
 ## Notes: Tracks Alchemy mastery procs (Flask/Elixir/Potion/Transmute) in TBC Classic.
-## Author: <YourName>
+## Author: Idun9
 ## Version: 1.0.0
 ## SavedVariables: AlchemyProcTrackerDB
+## IconTexture: Interface\Icons\Trade_Alchemy
 
 AlchemyTrackerItems.lua
 AlchemyProcTracker.lua
