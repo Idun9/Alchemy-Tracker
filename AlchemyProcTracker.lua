@@ -466,8 +466,7 @@ local displayGroup = "ELIXIR"
 
 local function CreateUI()
     -- Main frame: movable, draggable, clamped to screen.
-    -- "BackdropTemplate" is included so SetBackdrop works on all TBC client builds.
-    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
+    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent)
     f:SetSize(370, 268)
     f:SetPoint("CENTER")
     f:SetFrameStrata("MEDIUM")
@@ -646,6 +645,84 @@ APT_RefreshUI = function()
 end
 
 -- ============================================================
+-- Minimap Button
+-- A small draggable button on the minimap edge that toggles the
+-- stats window. The last angle is saved in the saved variables
+-- so it persists across sessions (stored at the top level of
+-- AlchemyProcTrackerDB, not per-character).
+-- ============================================================
+
+local function PositionMinimapButton(btn, angle)
+    local rad = math.rad(angle)
+    btn:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(rad), 80 * math.sin(rad))
+end
+
+local function CreateMinimapButton()
+    -- Ensure the angle key exists at the top-level DB.
+    if not AlchemyProcTrackerDB.minimapAngle then
+        AlchemyProcTrackerDB.minimapAngle = 45
+    end
+
+    local btn = CreateFrame("Button", "AlchemyTrackerMinimapButton", Minimap)
+    btn:SetSize(31, 31)
+    btn:SetFrameStrata("MEDIUM")
+    btn:SetFrameLevel(8)
+    btn:EnableMouse(true)
+    btn:RegisterForDrag("LeftButton")
+    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+    local icon = btn:CreateTexture(nil, "BACKGROUND")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER")
+    icon:SetTexture("Interface\\Icons\\Trade_Alchemy")
+
+    local border = btn:CreateTexture(nil, "OVERLAY")
+    border:SetSize(54, 54)
+    border:SetPoint("TOPLEFT", btn, "TOPLEFT", -11, 11)
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+
+    PositionMinimapButton(btn, AlchemyProcTrackerDB.minimapAngle)
+
+    -- Drag: recalculate angle from cursor position relative to minimap centre.
+    btn:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", function(self)
+            local mx, my = Minimap:GetCenter()
+            local cx, cy = GetCursorPosition()
+            local scale  = UIParent:GetEffectiveScale()
+            local angle  = math.deg(math.atan2((cy / scale) - my, (cx / scale) - mx))
+            AlchemyProcTrackerDB.minimapAngle = angle
+            PositionMinimapButton(self, angle)
+        end)
+    end)
+    btn:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+    end)
+
+    -- Click: toggle the stats window.
+    btn:SetScript("OnClick", function()
+        if APT_Frame then
+            if APT_Frame:IsShown() then
+                APT_Frame:Hide()
+            else
+                APT_Frame:Show()
+                APT_RefreshUI()
+            end
+        end
+    end)
+
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("Alchemy Tracker")
+        GameTooltip:AddLine("Click to toggle stats window", 1, 1, 1)
+        GameTooltip:AddLine("Drag to reposition", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+end
+
+-- ============================================================
 -- HandleSlashCommand
 -- Processes all /apt sub-commands.
 -- ============================================================
@@ -655,11 +732,13 @@ local function HandleSlashCommand(input)
     local cmd = input:match("^%s*(.-)%s*$")
 
     if cmd == "" or cmd:lower() == "help" then
-        print("|cff00ff00[Alchemy Tracker]|r Commands:")
-        print("  /apt show            – open the stats window")
-        print("  /apt hide            – close the stats window")
-        print("  /apt reset           – reset session stats (overall stats are kept)")
-        print("  /apt group <name>    – switch displayed group (FLASK/ELIXIR/POTION/TRANSMUTE)")
+        local ver = GetAddOnMetadata(ADDON_NAME, "Version") or "?"
+        print(string.format("|cff00ff00[Alchemy Tracker]|r v%s — TBC Classic alchemy mastery proc tracker", ver))
+        print("  |cffffd700/apt|r                                    — show this help")
+        print("  |cffffd700/apt show|r                               — open the stats window")
+        print("  |cffffd700/apt hide|r                               — close the stats window")
+        print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
+        print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
 
     elseif cmd:lower() == "show" then
         if APT_Frame then
@@ -716,6 +795,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         InitCharacterDB()
         DetectAlchemySpecialization()
         CreateUI()
+        CreateMinimapButton()
         print("|cff00ff00[Alchemy Tracker]|r Loaded. Type /apt for help.")
 
     elseif event == "PLAYER_LOGIN" then
