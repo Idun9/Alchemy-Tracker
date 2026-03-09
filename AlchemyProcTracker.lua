@@ -466,7 +466,7 @@ local displayGroup = "ELIXIR"
 
 local function CreateUI()
     -- Main frame: movable, draggable, clamped to screen.
-    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent)
+    local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
     f:SetSize(370, 268)
     f:SetPoint("CENTER")
     f:SetFrameStrata("MEDIUM")
