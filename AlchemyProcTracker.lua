@@ -183,11 +183,12 @@ end
 -- FindSpellBookSlotBySpellID, also available in TBC Classic.
 -- ============================================================
 
+-- Returns true if a mastery was found (so callers can stop watching).
 local function DetectAlchemySpecialization()
     local key = GetCharacterKey()
-    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then return end
+    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then return false end
     local charDB = AlchemyProcTrackerDB.characters[key]
-    if not charDB then return end
+    if not charDB then return false end
 
     -- IsPlayerSpell returns true if the player knows that spell/passive.
     -- verify: IsPlayerSpell works for mastery passives in TBC Classic
@@ -210,6 +211,8 @@ local function DetectAlchemySpecialization()
     charDB.specialization.isElixir    = isElixir
     charDB.specialization.isPotion    = isPotion
     charDB.specialization.isTransmute = isTransmute
+
+    return current ~= "None"
 end
 
 -- ============================================================
@@ -807,17 +810,24 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         print("|cff00ff00[Alchemy Tracker]|r Loaded. Type /apt for help.")
 
     elseif event == "PLAYER_LOGIN" then
-        -- Re-detect specialization after the full login sequence completes.
-        DetectAlchemySpecialization()
+        -- After login, check if mastery is already known.
+        -- If found, no need to keep watching for it.
+        if DetectAlchemySpecialization() then
+            self:UnregisterEvent("SKILL_LINES_CHANGED")
+        end
 
     elseif event == "TRADE_SKILL_SHOW" then
-        -- Re-detect when the trade skill window opens.
-        -- Useful if the player trained a mastery during this session.
-        DetectAlchemySpecialization()
+        -- Re-check when the trade skill window opens (covers mid-session training).
+        if DetectAlchemySpecialization() then
+            self:UnregisterEvent("SKILL_LINES_CHANGED")
+        end
 
-    elseif event == "LEARNED_SPELL_IN_TAB" then
-        -- Re-detect when the player learns any new spell (e.g. mastery training).
-        DetectAlchemySpecialization()
+    elseif event == "SKILL_LINES_CHANGED" then
+        -- Fires when the player trains a new skill; check if mastery was just learned.
+        -- Once found, unregister to idle and stop polling.
+        if DetectAlchemySpecialization() then
+            self:UnregisterEvent("SKILL_LINES_CHANGED")
+        end
 
     elseif event == "CHAT_MSG_SKILL" then
         -- In TBC Classic, alchemy craft creation messages appear in the Skill
@@ -834,7 +844,7 @@ end)
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("TRADE_SKILL_SHOW")
-eventFrame:RegisterEvent("LEARNED_SPELL_IN_TAB")
+eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
 eventFrame:RegisterEvent("CHAT_MSG_SKILL")
 
 -- If "You create" messages appear in the System channel instead of the Skill
