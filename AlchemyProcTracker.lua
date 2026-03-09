@@ -684,6 +684,7 @@ local function CreateMinimapButton()
     local icon = btn:GetNormalTexture()
     if icon then
         icon:SetSize(20, 20)
+        icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
     end
 
     local border = btn:CreateTexture(nil, "OVERLAY")
