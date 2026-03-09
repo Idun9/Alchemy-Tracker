@@ -477,20 +477,26 @@ local function CreateUI()
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetClampedToScreen(true)
 
-    -- Background + border.
+    -- Assign reference and hide FIRST so that any error in the backdrop calls
+    -- below cannot leave the frame visible and APT_Frame unset.
+    f:Hide()
+    APT_Frame = f
+
+    -- Solid debug background (WHITE8X8 tinted dark blue-grey).
+    -- Gives the frame a clearly visible fill so you can see its bounds
+    -- when using /apt show during development.
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(f)
+    bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    bg:SetVertexColor(0.08, 0.10, 0.20)
+    bg:SetAlpha(0.92)
+
+    -- Backdrop border on top of the solid fill.
     f:SetBackdrop({
-        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile     = true,
-        tileSize = 16,
         edgeSize = 16,
         insets   = { left = 4, right = 4, top = 4, bottom = 4 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.08, 0.90)
-
-    -- Hidden until the player opens it.
-    f:Hide()
-    APT_Frame = f
 
     -- Column x positions (pixels from the left edge of the frame).
     local X_LABEL   = 14   -- row label text starts here
@@ -671,10 +677,11 @@ local function CreateMinimapButton()
     btn:RegisterForDrag("LeftButton")
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
-    local icon = btn:CreateTexture(nil, "BACKGROUND")
-    icon:SetSize(20, 20)
-    icon:SetPoint("CENTER")
-    icon:SetTexture("Interface\\Icons\\Trade_Alchemy")
+    btn:SetNormalTexture("Interface\\Icons\\Trade_Alchemy")
+    local icon = btn:GetNormalTexture()
+    if icon then
+        icon:SetSize(20, 20)
+    end
 
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetSize(54, 54)
@@ -732,7 +739,8 @@ local function HandleSlashCommand(input)
     local cmd = input:match("^%s*(.-)%s*$")
 
     if cmd == "" or cmd:lower() == "help" then
-        local ver = GetAddOnMetadata(ADDON_NAME, "Version") or "?"
+        local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+        local ver   = (_meta and _meta(ADDON_NAME, "Version")) or "?"
         print(string.format("|cff00ff00[Alchemy Tracker]|r v%s — TBC Classic alchemy mastery proc tracker", ver))
         print("  |cffffd700/apt|r                                    — show this help")
         print("  |cffffd700/apt show|r                               — open the stats window")
