@@ -680,12 +680,9 @@ local function CreateMinimapButton()
     btn:RegisterForDrag("LeftButton")
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
-    btn:SetNormalTexture("Interface\\Icons\\Trade_Alchemy")
-    local icon = btn:GetNormalTexture()
-    if icon then
-        icon:SetSize(20, 20)
-        icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
-    end
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture("Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-300x300CroppedExtracted_dxt5.blp")
+    icon:SetAllPoints(btn)
 
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetSize(54, 54)
