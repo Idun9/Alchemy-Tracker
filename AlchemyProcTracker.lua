@@ -98,6 +98,22 @@ local function newGroupDefaults()
     return { session = newStatsDefaults(), overall = newStatsDefaults() }
 end
 
+-- Shallow-copies the scalar stats fields from s into a new table.
+-- Used when snapshotting a session; items = {} is always a fresh table.
+local function CopyStats(s)
+    return {
+        totalCrafts         = s.totalCrafts,
+        totalPotions        = s.totalPotions,
+        totalExtra          = s.totalExtra,
+        procs1              = s.procs1,
+        procs2              = s.procs2,
+        procs3              = s.procs3,
+        procs4              = s.procs4,
+        longestNoProcStreak = s.longestNoProcStreak,
+        items               = {},
+    }
+end
+
 local defaults = {
     global = {
         minimap = {},
@@ -115,7 +131,8 @@ local defaults = {
             POTION    = newGroupDefaults(),
             TRANSMUTE = newGroupDefaults(),
         },
-        sessions = {},  -- history of past sessions, newest first; max MAX_SESSIONS entries
+        nextSessionID = 0,  -- monotonic counter; assigned to each saved session for stable UI keys
+        sessions      = {},  -- history of past sessions, newest first; max MAX_SESSIONS entries
     },
 }
 
@@ -296,7 +313,7 @@ local function ParseCreateMessage(msg)
     local amountStr, link = msg:match("^You create (%d+)x (.+)%.$")
     if amountStr and link then return tonumber(amountStr), link end
 
-    link = msg:match("^You create: (.+)%.?$")
+    link = msg:match("^You create: (.+)%.$")
     if link then return 1, link end
 
     return nil, nil
@@ -363,7 +380,7 @@ local function SaveCurrentSession()
 
     -- Only save if at least one craft happened this session.
     local hasActivity = false
-    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+    for _, group in ipairs(GROUPS_ORDER) do
         local gs = APT.db.char.stats[group]
         if gs and gs.session.totalCrafts > 0 then
             hasActivity = true
@@ -373,20 +390,11 @@ local function SaveCurrentSession()
     if not hasActivity then return end
 
     -- Build snapshot: copy session stats for each group.
-    local snapshot = { date = date("%Y-%m-%d %H:%M"), stats = {} }
-    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
-        local s = APT.db.char.stats[group].session
-        local gs = {
-            totalCrafts         = s.totalCrafts,
-            totalPotions        = s.totalPotions,
-            totalExtra          = s.totalExtra,
-            procs1              = s.procs1,
-            procs2              = s.procs2,
-            procs3              = s.procs3,
-            procs4              = s.procs4,
-            longestNoProcStreak = s.longestNoProcStreak,
-            items               = {},
-        }
+    APT.db.char.nextSessionID = (APT.db.char.nextSessionID or 0) + 1
+    local snapshot = { date = date("%Y-%m-%d %H:%M"), id = APT.db.char.nextSessionID, stats = {} }
+    for _, group in ipairs(GROUPS_ORDER) do
+        local s  = APT.db.char.stats[group].session
+        local gs = CopyStats(s)
         if s.items then
             for id, it in pairs(s.items) do
                 gs.items[id] = { name = it.name, totalCrafts = it.totalCrafts, totalPotions = it.totalPotions, totalExtra = it.totalExtra }
@@ -408,7 +416,7 @@ end
 
 local function ResetSessionStats()
     SaveCurrentSession()
-    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+    for _, group in ipairs(GROUPS_ORDER) do
         if APT.db.char.stats[group] then
             APT.db.char.stats[group].session = newStatsDefaults()
         end
@@ -419,7 +427,7 @@ end
 
 local function ResetAllStats()
     SaveCurrentSession()
-    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+    for _, group in ipairs(GROUPS_ORDER) do
         if APT.db.char.stats[group] then
             APT.db.char.stats[group].session = newStatsDefaults()
             APT.db.char.stats[group].overall = newStatsDefaults()
@@ -565,6 +573,29 @@ local function CreateHistoryUI()
     end
 end
 
+-- ============================================================
+-- History UI helpers (module-level; no upvalues from refresh state)
+-- ============================================================
+
+local function SetRowBg(r, rr, gg, bb, aa)
+    r._r, r._g, r._b, r._a = rr, gg, bb, aa
+    r.rbg:SetVertexColor(rr, gg, bb, aa)
+end
+
+-- Combine per-group stats tables into one flat table for CalcPctGain.
+local function CombineGroups(statsMap)
+    local s = { totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
+    for _, g in ipairs(GROUPS_ORDER) do
+        local gs = statsMap[g]
+        if gs then
+            s.totalCrafts  = s.totalCrafts  + gs.totalCrafts
+            s.totalPotions = s.totalPotions + gs.totalPotions
+            s.totalExtra   = s.totalExtra   + gs.totalExtra
+        end
+    end
+    return s
+end
+
 APT_RefreshHistory = function()
     if not APT_HistoryFrame or not APT_HistoryFrame:IsShown() then return end
     if not APT.db then return end
@@ -580,11 +611,6 @@ APT_RefreshHistory = function()
 
     local rowIdx = 0
     local curY   = 0
-
-    local function SetRowBg(r, rr, gg, bb, aa)
-        r._r, r._g, r._b, r._a = rr, gg, bb, aa
-        r.rbg:SetVertexColor(rr, gg, bb, aa)
-    end
 
     local function UseRow(height)
         rowIdx = rowIdx + 1
@@ -608,20 +634,6 @@ APT_RefreshHistory = function()
         r:Show()
         curY = curY + (height or H_ROW)
         return r
-    end
-
-    -- Combine per-group stats tables into one flat table for CalcPctGain.
-    local function CombineGroups(statsMap)
-        local s = { totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
-        for _, g in ipairs(GROUPS_ORDER) do
-            local gs = statsMap[g]
-            if gs then
-                s.totalCrafts  = s.totalCrafts  + gs.totalCrafts
-                s.totalPotions = s.totalPotions + gs.totalPotions
-                s.totalExtra   = s.totalExtra   + gs.totalExtra
-            end
-        end
-        return s
     end
 
     local function AddSessionHeader(label, key, combined)
@@ -697,7 +709,7 @@ APT_RefreshHistory = function()
 
     -- ── Past sessions (newest first) ──────────────────────────
     for i, sess in ipairs(sessions) do
-        local key      = "sess_" .. i
+        local key      = "sid_" .. (sess.id or i)   -- sess.id is stable across prepends; fallback for legacy entries
         local combined = CombineGroups(sess.stats or {})
         AddSessionHeader(string.format("Session %d  —  %s", i, sess.date), key, combined)
         if expandedSessions[key] then
@@ -1168,9 +1180,10 @@ end
 -- ============================================================
 
 function APT:HandleSlashCommand(input)
-    local cmd = input:match("^%s*(.-)%s*$")
+    local cmd      = input:match("^%s*(.-)%s*$")
+    local cmdLower = cmd:lower()
 
-    if cmd == "" or cmd:lower() == "help" then
+    if cmdLower == "" or cmdLower == "help" then
         local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
         local ver   = (_meta and _meta(ADDON_NAME, "Version")) or "?"
         self:Print(string.format("v%s — TBC Classic alchemy mastery proc tracker", ver))
@@ -1182,33 +1195,33 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt history|r                            — open the session history browser")
         self:Print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
 
-    elseif cmd:lower() == "show" then
+    elseif cmdLower == "show" then
         if APT_Frame then
             APT_Frame:Show()
             APT_RefreshUI()
         end
 
-    elseif cmd:lower() == "hide" then
+    elseif cmdLower == "hide" then
         if APT_Frame then APT_Frame:Hide() end
 
-    elseif cmd:lower() == "reset" then
+    elseif cmdLower == "reset" then
         ResetSessionStats()
 
-    elseif cmd:lower() == "reset all" then
+    elseif cmdLower == "reset all" then
         ResetAllStats()
 
-    elseif cmd:lower() == "history" then
+    elseif cmdLower == "history" then
         if APT_HistoryFrame then
             APT_HistoryFrame:Show()
             APT_RefreshHistory()
         end
 
-    elseif cmd:lower() == "debug" then
+    elseif cmdLower == "debug" then
         debugMode = not debugMode
         self:Print("Debug mode: " .. (debugMode and "|cff00ff00ON|r — craft now to see event/message in chat." or "|cffff4444OFF|r"))
 
     else
-        local groupArg = cmd:match("^[Gg][Rr][Oo][Uu][Pp]%s+(%a+)$")
+        local groupArg = cmdLower:match("^group%s+(%a+)$")
         if groupArg then
             local g = groupArg:upper()
             if g == "FLASK" or g == "ELIXIR" or g == "POTION" or g == "TRANSMUTE" then
