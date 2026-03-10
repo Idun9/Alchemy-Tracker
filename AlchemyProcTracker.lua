@@ -203,7 +203,7 @@ end
 -- Applies one finalized craft to both session and overall scopes.
 -- ============================================================
 
-local function UpdateStats(groupStats, totalCreated)
+local function UpdateStats(groupStats, totalCreated, itemID, itemName)
     local extra = totalCreated - 1
 
     for _, scope in ipairs({ "session", "overall" }) do
@@ -226,6 +226,20 @@ local function UpdateStats(groupStats, totalCreated)
                 s.longestNoProcStreak = s.currentNoProcStreak
             end
         end
+    end
+
+    -- Per-item tracking (session only).
+    if itemID and itemName then
+        local s = groupStats["session"]
+        if not s.items then s.items = {} end
+        local it = s.items[itemID]
+        if not it then
+            it = { name = itemName, totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
+            s.items[itemID] = it
+        end
+        it.totalCrafts  = it.totalCrafts  + 1
+        it.totalPotions = it.totalPotions + totalCreated
+        it.totalExtra   = it.totalExtra   + extra
     end
 end
 
@@ -252,7 +266,7 @@ local function FinalizeCraft()
         ))
     end
 
-    UpdateStats(groupStats, totalCreated)
+    UpdateStats(groupStats, totalCreated, currentCraft.itemID, currentCraft.itemName)
     if APT_RefreshUI then APT_RefreshUI() end
 
     currentCraft = nil
@@ -361,7 +375,7 @@ local function SaveCurrentSession()
     local snapshot = { date = date("%Y-%m-%d %H:%M"), stats = {} }
     for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
         local s = APT.db.char.stats[group].session
-        snapshot.stats[group] = {
+        local gs = {
             totalCrafts         = s.totalCrafts,
             totalPotions        = s.totalPotions,
             totalExtra          = s.totalExtra,
@@ -370,7 +384,14 @@ local function SaveCurrentSession()
             procs3              = s.procs3,
             procs4              = s.procs4,
             longestNoProcStreak = s.longestNoProcStreak,
+            items               = {},
         }
+        if s.items then
+            for id, it in pairs(s.items) do
+                gs.items[id] = { name = it.name, totalCrafts = it.totalCrafts, totalPotions = it.totalPotions, totalExtra = it.totalExtra }
+            end
+        end
+        snapshot.stats[group] = gs
     end
 
     -- Prepend (newest first) and trim to MAX_SESSIONS.
@@ -574,18 +595,31 @@ end
 
 local GROUPS_ORDER = { "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }
 
-local function FormatGroupStats(s, groupName)
+-- Group summary line: name, base crafts, proc chance.
+local function FormatGroupSummary(s, groupName)
     if s.totalCrafts == 0 then
         return string.format("|cffffd700%s:|r  No data", groupName)
     end
-    return string.format(
-        "|cffffd700%s:|r  %d crafts  •  %d items produced  •  +%d extra  (%s)\n"
-        .. "    Procs:  x1=%d  x2=%d  x3=%d  x4+=%d  |  Longest no-proc streak: %d",
-        groupName,
-        s.totalCrafts, s.totalPotions, s.totalExtra, CalcPctGain(s),
-        s.procs1, s.procs2, s.procs3, s.procs4,
-        s.longestNoProcStreak
-    )
+    return string.format("|cffffd700%s:|r  %d crafts  •  %s proc chance",
+        groupName, s.totalCrafts, CalcPctGain(s))
+end
+
+-- Per-item lines sorted by name, indented under their group.
+local function FormatItemLines(items)
+    if not items then return {} end
+    -- Collect and sort by name.
+    local sorted = {}
+    for id, it in pairs(items) do
+        sorted[#sorted + 1] = it
+    end
+    table.sort(sorted, function(a, b) return a.name < b.name end)
+    local lines = {}
+    for _, it in ipairs(sorted) do
+        lines[#lines + 1] = string.format(
+            "  |cffaaaaaa%s:|r  %d base  •  %d produced  •  %s proc chance",
+            it.name, it.totalCrafts, it.totalPotions, CalcPctGain(it))
+    end
+    return lines
 end
 
 local function BuildOverallDescription()
@@ -594,10 +628,10 @@ local function BuildOverallDescription()
     for _, g in ipairs(GROUPS_ORDER) do
         local gs = APT.db.char.stats[g]
         if gs then
-            lines[#lines + 1] = FormatGroupStats(gs.overall, g)
+            lines[#lines + 1] = FormatGroupSummary(gs.overall, g)
         end
     end
-    return table.concat(lines, "\n\n")
+    return table.concat(lines, "\n")
 end
 
 local function BuildSessionDescription(idx)
@@ -610,11 +644,14 @@ local function BuildSessionDescription(idx)
     for _, g in ipairs(GROUPS_ORDER) do
         local s = sess.stats[g]
         if s and s.totalCrafts > 0 then
-            lines[#lines + 1] = FormatGroupStats(s, g)
+            lines[#lines + 1] = FormatGroupSummary(s, g)
+            for _, itemLine in ipairs(FormatItemLines(s.items)) do
+                lines[#lines + 1] = itemLine
+            end
         end
     end
     if #lines == 0 then return "No crafts recorded in this session." end
-    return table.concat(lines, "\n\n")
+    return table.concat(lines, "\n")
 end
 
 -- ============================================================
