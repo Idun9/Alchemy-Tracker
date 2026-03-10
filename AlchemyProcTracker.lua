@@ -532,35 +532,19 @@ local function RegisterOptions()
                 name  = "Window",
                 order = 1,
             },
-            showWindow = {
+            toggleWindow = {
                 type  = "execute",
-                name  = "Show Stats Window",
-                desc  = "Open the stats window  (/apt show)",
+                name  = function()
+                    return (APT_Frame and APT_Frame:IsShown()) and "Hide Stats Window" or "Show Stats Window"
+                end,
                 func  = function()
-                    if APT_Frame then APT_Frame:Show(); APT_RefreshUI() end
+                    if APT_Frame then
+                        if APT_Frame:IsShown() then APT_Frame:Hide()
+                        else APT_Frame:Show(); APT_RefreshUI()
+                        end
+                    end
                 end,
                 order = 2,
-            },
-            hideWindow = {
-                type  = "execute",
-                name  = "Hide Stats Window",
-                desc  = "Close the stats window  (/apt hide)",
-                func  = function()
-                    if APT_Frame then APT_Frame:Hide() end
-                end,
-                order = 3,
-            },
-            displayGroup = {
-                type   = "select",
-                name   = "Display Group",
-                desc   = "Switch the displayed group  (/apt group <name>)",
-                values = { FLASK = "Flask", ELIXIR = "Elixir", POTION = "Potion", TRANSMUTE = "Transmute" },
-                get    = function() return displayGroup end,
-                set    = function(_, val)
-                    displayGroup = val
-                    if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
-                end,
-                order  = 4,
             },
             statsHeader = {
                 type  = "header",
