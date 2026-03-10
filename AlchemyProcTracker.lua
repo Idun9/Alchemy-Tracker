@@ -1,19 +1,26 @@
 -- AlchemyProcTracker.lua
 -- Tracks Alchemy mastery procs (Flask/Elixir/Potion/Transmute) in TBC Classic.
--- Focus: Elixir Mastery (spell ID 28677), but the logic is generic for all masteries.
 --
 -- Usage:
 --   /apt          → show help
 --   /apt show     → open the stats window
 --   /apt hide     → close the stats window
 --   /apt reset    → reset session stats (overall stats are kept)
+--   /apt reset all → reset ALL stats including overall
 --   /apt group X  → switch the displayed group (FLASK/ELIXIR/POTION/TRANSMUTE)
 
-local ADDON_NAME, ns = ...
+local ADDON_NAME = ...
+
+-- ============================================================
+-- Addon Object
+-- Mixins: AceConsole-3.0 (Print, RegisterChatCommand)
+--         AceEvent-3.0   (RegisterEvent, UnregisterEvent)
+-- ============================================================
+
+local APT = LibStub("AceAddon-3.0"):NewAddon("AlchemyTracker", "AceConsole-3.0", "AceEvent-3.0")
 
 -- ============================================================
 -- Constants: Alchemy Mastery Passive Spell IDs (TBC Classic)
--- Verify these IDs are correct in-game if detection feels off.
 -- ============================================================
 
 local ELIXIR_MASTER_SPELL_ID    = 28677
@@ -22,43 +29,118 @@ local TRANSMUTE_MASTER_SPELL_ID = 28672
 
 -- ============================================================
 -- TrackedItems (flat lookup, built at load time)
--- Do not edit this table directly.
--- To add or remove items, edit AlchemyTrackerItems.lua instead.
+-- Do not edit directly — edit AlchemyTrackerItems.lua instead.
 -- ============================================================
 
 local TrackedItems = {}
 
 -- ============================================================
+-- UI state
+-- ============================================================
+
+local displayGroup = "ELIXIR"
+local APT_Frame
+local APT_Lines   = {}
+local APT_RefreshUI  -- forward declaration; assigned after CreateUI
+local debugMode   = false
+
+-- ============================================================
+-- Current Craft State
+-- A single in-progress craft accumulates here.
+-- Messages for the same item within CRAFT_WINDOW seconds are grouped as one
+-- craft (base + proc). After the window the craft is finalized immediately.
+-- A different item arriving mid-window finalizes the previous craft first.
+-- ============================================================
+
+local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
+local SESSION_TIMEOUT = 900   -- 15 minutes: if alchemy window stays closed this long, new session starts next open
+
+local currentCraft  = nil
+local craftTimer    = nil   -- C_Timer handle for finalizing the current craft
+local sessionTimer  = nil   -- C_Timer handle for session inactivity
+local sessionClosed = false -- true when 15-min timeout fired; session resets on next TRADE_SKILL_SHOW
+
+--[[
+  currentCraft shape while accumulating:
+  {
+    itemID       = number,
+    itemName     = string,
+    group        = string,   -- "FLASK" | "ELIXIR" | "POTION" | "TRANSMUTE"
+    totalCreated = number,
+  }
+  Finalized CRAFT_WINDOW seconds after the last "You create" message for that item,
+  or immediately when a different item arrives or TRADE_SKILL_CLOSE fires.
+]]
+
+-- ============================================================
+-- AceDB-3.0 Defaults
+-- AceDB handles per-character (db.char) vs global (db.global)
+-- scoping and deep-copies these defaults for new entries.
+-- ============================================================
+
+local function newStatsDefaults()
+    return {
+        totalCrafts         = 0,
+        totalPotions        = 0,
+        totalExtra          = 0,
+        procs1              = 0,
+        procs2              = 0,
+        procs3              = 0,
+        procs4              = 0,
+        currentNoProcStreak = 0,
+        longestNoProcStreak = 0,
+    }
+end
+
+local function newGroupDefaults()
+    return { session = newStatsDefaults(), overall = newStatsDefaults() }
+end
+
+local defaults = {
+    global = {
+        minimap = {},
+    },
+    char = {
+        specialization = {
+            current     = "None",
+            isElixir    = false,
+            isPotion    = false,
+            isTransmute = false,
+        },
+        stats = {
+            FLASK     = newGroupDefaults(),
+            ELIXIR    = newGroupDefaults(),
+            POTION    = newGroupDefaults(),
+            TRANSMUTE = newGroupDefaults(),
+        },
+    },
+}
+
+-- ============================================================
 -- BuildTrackedItemLookup
--- Reads AlchemyTrackerItemData (defined in AlchemyTrackerItems.lua)
--- and flattens its expansion > group > itemID structure into the
--- simple flat lookup table above.
---
--- Result: TrackedItems[itemID] = { group, name, expansion }
---
--- Called once from ADDON_LOADED, after both files are loaded.
+-- Reads AlchemyTrackerItemData and flattens it into TrackedItems.
+-- Called once from OnInitialize after SavedVariables are loaded.
 -- ============================================================
 
 local function BuildTrackedItemLookup()
     if not AlchemyTrackerItemData then
-        print("|cffff0000[Alchemy Tracker]|r ERROR: AlchemyTrackerItemData not found. Check AlchemyTrackerItems.lua.")
+        APT:Print("|cffff0000ERROR:|r AlchemyTrackerItemData not found. Check AlchemyTrackerItems.lua.")
         return
     end
 
     for expansion, groups in pairs(AlchemyTrackerItemData) do
         for group, items in pairs(groups) do
             for itemID, name in pairs(items) do
-                -- Warn about duplicate item IDs (easy mistake when filling in the list).
                 if TrackedItems[itemID] then
-                    print(string.format(
-                        "|cffff8800[Alchemy Tracker]|r Warning: duplicate item ID %d ('%s') in %s/%s — first entry kept.",
+                    APT:Print(string.format(
+                        "|cffff8800Warning:|r duplicate item ID %d ('%s') in %s/%s — first entry kept.",
                         itemID, name, expansion, group
                     ))
                 else
                     TrackedItems[itemID] = {
-                        group     = group,      -- "FLASK", "ELIXIR", "POTION", or "TRANSMUTE"
-                        name      = name,       -- display name shown in chat and the UI
-                        expansion = expansion,  -- "TBC", "Classic", "WotLK", etc.
+                        group     = group,
+                        name      = name,
+                        expansion = expansion,
                     }
                 end
             end
@@ -68,199 +150,58 @@ end
 
 -- ============================================================
 -- GetTrackedGroupForItem
--- Returns the group key ("FLASK", "ELIXIR", etc.) and the
--- display name for a given itemID, or nil, nil if not tracked.
 -- ============================================================
 
 local function GetTrackedGroupForItem(itemID)
     local info = TrackedItems[itemID]
-    if info then
-        return info.group, info.name
-    end
+    if info then return info.group, info.name end
     return nil, nil
 end
 
 -- ============================================================
--- GetCharacterKey
--- Builds a unique string key for the current character.
--- Format: "RealmName-CharacterName"
+-- CalcPctGain
 -- ============================================================
 
-local function GetCharacterKey()
-    local name  = UnitName("player") or "Unknown"
-    local realm = GetRealmName()     or "Unknown"
-    return realm .. "-" .. name
-end
-
--- ============================================================
--- NewStatsBlock
--- Returns a fresh stats table with every counter at zero.
--- Both session and overall scopes share the same structure.
--- ============================================================
-
-local function NewStatsBlock()
-    return {
-        totalCrafts         = 0,  -- number of crafts finalized
-        totalPotions        = 0,  -- total items produced (base + all extras)
-        totalExtra          = 0,  -- total extra items gained from procs
-        procs1              = 0,  -- crafts that gave exactly +1 extra
-        procs2              = 0,  -- crafts that gave exactly +2 extra
-        procs3              = 0,  -- crafts that gave exactly +3 extra
-        procs4              = 0,  -- crafts that gave +4 or more extra
-        currentNoProcStreak = 0,
-        longestNoProcStreak = 0,
-    }
-end
-
--- ============================================================
--- NewGroupEntry
--- Returns a table with fresh session and overall stats blocks.
--- One of these is created for each group (FLASK, ELIXIR, etc.).
--- ============================================================
-
-local function NewGroupEntry()
-    return {
-        session = NewStatsBlock(),
-        overall = NewStatsBlock(),
-    }
-end
-
--- ============================================================
--- InitCharacterDB
--- Ensures AlchemyProcTrackerDB has all required keys for this
--- character. Safe to call multiple times (only fills gaps).
--- ============================================================
-
-local function InitCharacterDB()
-    -- Create the top-level DB if this is the very first ever load.
-    if not AlchemyProcTrackerDB then
-        AlchemyProcTrackerDB = { characters = {} }
+local function CalcPctGain(s)
+    if s.totalPotions > 0 then
+        return string.format("+%.1f%%", (s.totalExtra / s.totalPotions) * 100)
     end
-    if not AlchemyProcTrackerDB.characters then
-        AlchemyProcTrackerDB.characters = {}
-    end
-
-    local key = GetCharacterKey()
-
-    -- Create the per-character entry if it does not exist yet.
-    if not AlchemyProcTrackerDB.characters[key] then
-        AlchemyProcTrackerDB.characters[key] = {}
-    end
-
-    local charDB = AlchemyProcTrackerDB.characters[key]
-
-    -- Specialization block.
-    if not charDB.specialization then
-        charDB.specialization = {
-            current     = "None",  -- "Elixir", "Potion", "Transmute", or "None"
-            isElixir    = false,
-            isPotion    = false,
-            isTransmute = false,
-        }
-    end
-
-    -- Stats blocks, one per group.
-    if not charDB.stats then
-        charDB.stats = {}
-    end
-    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
-        if not charDB.stats[group] then
-            charDB.stats[group] = NewGroupEntry()
-        end
-    end
-
-    return charDB
+    return "+0.0%"
 end
 
 -- ============================================================
 -- DetectAlchemySpecialization
--- Checks which mastery passive (if any) the player has learned
--- and writes the result to the saved variables.
---
--- NOTE: IsPlayerSpell(spellID) is used here to check for passive
--- specialization spells. This should work in TBC Classic, but
--- verify in-game if detection seems wrong. An alternative is
--- FindSpellBookSlotBySpellID, also available in TBC Classic.
+-- Returns true if a mastery was found (so callers can stop watching).
 -- ============================================================
 
--- Returns true if a mastery was found (so callers can stop watching).
 local function DetectAlchemySpecialization()
-    local key = GetCharacterKey()
-    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then return false end
-    local charDB = AlchemyProcTrackerDB.characters[key]
-    if not charDB then return false end
-
-    -- IsPlayerSpell returns true if the player knows that spell/passive.
-    -- verify: IsPlayerSpell works for mastery passives in TBC Classic
+    local spec        = APT.db.char.specialization
     local isElixir    = IsPlayerSpell(ELIXIR_MASTER_SPELL_ID)    or false
     local isPotion    = IsPlayerSpell(POTION_MASTER_SPELL_ID)    or false
     local isTransmute = IsPlayerSpell(TRANSMUTE_MASTER_SPELL_ID) or false
 
-    -- Only one mastery is possible at a time; Elixir is checked first
-    -- since that is the primary use case for this addon.
     local current = "None"
-    if isElixir then
-        current = "Elixir"
-    elseif isPotion then
-        current = "Potion"
-    elseif isTransmute then
-        current = "Transmute"
+    if     isElixir    then current = "Elixir"
+    elseif isPotion    then current = "Potion"
+    elseif isTransmute then current = "Transmute"
     end
 
-    charDB.specialization.current     = current
-    charDB.specialization.isElixir    = isElixir
-    charDB.specialization.isPotion    = isPotion
-    charDB.specialization.isTransmute = isTransmute
+    spec.current     = current
+    spec.isElixir    = isElixir
+    spec.isPotion    = isPotion
+    spec.isTransmute = isTransmute
 
     return current ~= "None"
 end
 
 -- ============================================================
--- Forward declarations
--- These locals are assigned later in the file but are referenced
--- in functions defined earlier. Lua closures handle this correctly:
--- by the time the functions are actually called, the values will
--- have been assigned.
--- ============================================================
-
-local APT_RefreshUI   -- assigned in the UI section
-local APT_Frame       -- the main UI frame widget
-local APT_Lines = {}  -- FontString references, keyed by name
-
--- ============================================================
--- Current Craft State
--- A single in-progress craft accumulates here.
--- Multiple "You create" messages for the same item within the
--- same second are merged into one craft entry.
--- ============================================================
-
-local currentCraft = nil
-
---[[
-  currentCraft shape while a craft is being accumulated:
-  {
-    itemID       = number,   -- item being crafted
-    itemName     = string,   -- display name from TrackedItems
-    group        = string,   -- "FLASK", "ELIXIR", "POTION", or "TRANSMUTE"
-    timestampSec = number,   -- math.floor(GetTime()) at first message
-    totalCreated = number,   -- running total of items seen so far
-  }
-]]
-
--- ============================================================
 -- UpdateStats
--- Applies one finalized craft result to both session and overall
--- stats for its group.
---
---   groupStats   : charDB.stats[group]  (contains .session and .overall)
---   totalCreated : integer, total items produced in this craft
+-- Applies one finalized craft to both session and overall scopes.
 -- ============================================================
 
 local function UpdateStats(groupStats, totalCreated)
-    -- A craft always produces at least 1 item; everything above 1 is "extra".
     local extra = totalCreated - 1
 
-    -- Apply the exact same logic to both session and overall.
     for _, scope in ipairs({ "session", "overall" }) do
         local s = groupStats[scope]
 
@@ -269,16 +210,13 @@ local function UpdateStats(groupStats, totalCreated)
         s.totalExtra   = s.totalExtra   + extra
 
         if extra >= 1 then
-            -- Proc: put it in the right bucket.
             if     extra == 1 then s.procs1 = s.procs1 + 1
             elseif extra == 2 then s.procs2 = s.procs2 + 1
             elseif extra == 3 then s.procs3 = s.procs3 + 1
-            else                   s.procs4 = s.procs4 + 1  -- +4 or more
+            else                   s.procs4 = s.procs4 + 1
             end
-            -- Any proc resets the running no-proc streak.
             s.currentNoProcStreak = 0
         else
-            -- No proc this craft.
             s.currentNoProcStreak = s.currentNoProcStreak + 1
             if s.currentNoProcStreak > s.longestNoProcStreak then
                 s.longestNoProcStreak = s.currentNoProcStreak
@@ -289,27 +227,12 @@ end
 
 -- ============================================================
 -- FinalizeCraft
--- Called when the current craft is complete: either because a
--- new craft started or a new item was seen (different ID/second).
--- Calculates extra, updates stats, prints a notice on proc.
 -- ============================================================
 
 local function FinalizeCraft()
     if not currentCraft then return end
 
-    local key = GetCharacterKey()
-    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then
-        currentCraft = nil
-        return
-    end
-    local charDB = AlchemyProcTrackerDB.characters[key]
-    if not charDB then
-        currentCraft = nil
-        return
-    end
-
-    local group      = currentCraft.group
-    local groupStats = charDB.stats[group]
+    local groupStats = APT.db.char.stats[currentCraft.group]
     if not groupStats then
         currentCraft = nil
         return
@@ -318,17 +241,14 @@ local function FinalizeCraft()
     local totalCreated = currentCraft.totalCreated
     local extra        = totalCreated - 1
 
-    -- Print a chat message on a proc so the player notices.
     if extra > 0 then
-        print(string.format(
-            "|cff00ff00[Alchemy Tracker]|r Proc! %s: crafted %d (+%d extra).",
+        APT:Print(string.format(
+            "|cff00ff00Proc!|r %s: crafted %d (+%d extra).",
             currentCraft.itemName, totalCreated, extra
         ))
     end
 
     UpdateStats(groupStats, totalCreated)
-
-    -- Refresh the window if it is currently open.
     if APT_RefreshUI then APT_RefreshUI() end
 
     currentCraft = nil
@@ -336,141 +256,115 @@ end
 
 -- ============================================================
 -- ParseItemIDFromLink
--- Extracts the numeric item ID from a WoW item hyperlink string.
--- Item links look like: |cffffffff|Hitem:12345:0:0:0:...|h[Name]|h|r
--- Returns the item ID as a number, or nil if no link is found.
 -- ============================================================
 
 local function ParseItemIDFromLink(link)
     if not link then return nil end
     local idStr = link:match("|Hitem:(%d+):")
-    if idStr then
-        return tonumber(idStr)
-    end
-    return nil
+    return idStr and tonumber(idStr) or nil
 end
 
 -- ============================================================
 -- ParseCreateMessage
--- Parses an English "You create" chat message.
--- Handles two formats that appear in TBC Classic:
---   "You create: [item link]."       → 1 item
---   "You create Nx [item link]."     → N items  (N >= 2)
--- Returns amount (number) and the raw link string, or nil, nil
--- if the message is not a creation message.
+-- Handles the two TBC Classic "You create" formats:
+--   "You create: [link]."    → 1 item
+--   "You create Nx [link]."  → N items
 -- ============================================================
 
 local function ParseCreateMessage(msg)
     if not msg then return nil, nil end
 
-    -- Format with explicit count: "You create 3x |Hitem:...|h[Name]|h|r."
     local amountStr, link = msg:match("^You create (%d+)x (.+)%.$")
-    if amountStr and link then
-        return tonumber(amountStr), link
-    end
+    if amountStr and link then return tonumber(amountStr), link end
 
-    -- Single-item format: "You create: |Hitem:...|h[Name]|h|r."
-    link = msg:match("^You create: (.+)%.$")
-    if link then
-        return 1, link
-    end
+    link = msg:match("^You create: (.+)%.?$")
+    if link then return 1, link end
 
-    -- Not a creation message we recognize.
     return nil, nil
 end
 
 -- ============================================================
 -- HandleCraftEvent
--- Processes one incoming chat message.
--- Groups same-item, same-second messages into a single craft.
+-- Groups same-item messages within CRAFT_WINDOW seconds (base + proc).
+-- Each craft is finalized independently via a short timer.
 -- ============================================================
+
+local function CancelCraftTimer()
+    if craftTimer then
+        craftTimer:Cancel()
+        craftTimer = nil
+    end
+end
+
+local function ScheduleCraftFinalize()
+    CancelCraftTimer()
+    craftTimer = C_Timer.NewTimer(CRAFT_WINDOW, function()
+        craftTimer = nil
+        FinalizeCraft()
+    end)
+end
 
 local function HandleCraftEvent(msg)
     local amount, link = ParseCreateMessage(msg)
-    if not amount then return end  -- not a "You create" message
+    if not amount then return end
 
     local itemID = ParseItemIDFromLink(link)
-    if not itemID then return end  -- could not extract item ID
+    if not itemID then return end
 
     local group, itemName = GetTrackedGroupForItem(itemID)
-    if not group then return end   -- item is not in our tracking table
+    if not group then return end
 
-    -- Use whole-second timestamps for grouping.
-    local tSec = math.floor(GetTime())
-
-    if currentCraft
-        and currentCraft.itemID       == itemID
-        and currentCraft.timestampSec == tSec
-    then
-        -- Same item, same second → accumulate into the running craft.
+    if currentCraft and currentCraft.itemID == itemID then
+        -- Same item within the window: accumulate (proc extra items).
         currentCraft.totalCreated = currentCraft.totalCreated + amount
+        ScheduleCraftFinalize()
     else
-        -- Different item or different second → close the previous craft,
-        -- then open a new one.
+        -- Different item (or no active craft): finalize previous immediately.
+        CancelCraftTimer()
         FinalizeCraft()
-
         currentCraft = {
             itemID       = itemID,
             itemName     = itemName,
             group        = group,
-            timestampSec = tSec,
             totalCreated = amount,
         }
+        ScheduleCraftFinalize()
     end
 end
 
 -- ============================================================
 -- ResetSessionStats
--- Wipes the session stats block for every group.
--- Overall stats are intentionally left untouched.
 -- ============================================================
 
 local function ResetSessionStats()
-    local key = GetCharacterKey()
-    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then return end
-    local charDB = AlchemyProcTrackerDB.characters[key]
-    if not charDB then return end
-
     for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
-        if charDB.stats[group] then
-            charDB.stats[group].session = NewStatsBlock()
+        if APT.db.char.stats[group] then
+            APT.db.char.stats[group].session = newStatsDefaults()
         end
     end
+    APT:Print("Session stats have been reset.")
+    if APT_RefreshUI then APT_RefreshUI() end
+end
 
-    print("|cff00ff00[Alchemy Tracker]|r Session stats have been reset.")
+local function ResetAllStats()
+    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+        if APT.db.char.stats[group] then
+            APT.db.char.stats[group].session = newStatsDefaults()
+            APT.db.char.stats[group].overall = newStatsDefaults()
+        end
+    end
+    APT:Print("All stats (session and overall) have been reset.")
     if APT_RefreshUI then APT_RefreshUI() end
 end
 
 -- ============================================================
--- CalcPctGain
--- Returns a formatted "+X.X%" string for a stats block.
--- ============================================================
-
-local function CalcPctGain(s)
-    if s.totalPotions > 0 then
-        local pct = (s.totalExtra / s.totalPotions) * 100
-        return string.format("+%.1f%%", pct)
-    end
-    return "+0.0%"
-end
-
--- ============================================================
--- displayGroup
--- Which group the UI is currently showing. Change with /apt group.
--- ============================================================
-
-local displayGroup = "ELIXIR"
-
--- ============================================================
 -- CreateUI
--- Builds the stats window once on ADDON_LOADED.
--- Hidden by default; shown with /apt show.
+-- Builds the stats window once on OnInitialize. Hidden by default.
 -- ============================================================
 
 local function CreateUI()
-    -- Main frame: movable, draggable, clamped to screen.
     local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
-    f:SetSize(370, 268)
+    f:SetSize(300, 230)
     f:SetPoint("CENTER")
     f:SetFrameStrata("MEDIUM")
     f:SetMovable(true)
@@ -480,67 +374,50 @@ local function CreateUI()
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetClampedToScreen(true)
 
-    -- Assign reference and hide FIRST so that any error in the backdrop calls
-    -- below cannot leave the frame visible and APT_Frame unset.
     f:Hide()
     APT_Frame = f
 
-    -- Solid debug background (WHITE8X8 tinted dark blue-grey).
-    -- Gives the frame a clearly visible fill so you can see its bounds
-    -- when using /apt show during development.
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(f)
     bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     bg:SetVertexColor(0.08, 0.10, 0.20)
     bg:SetAlpha(0.92)
 
-    -- Backdrop border on top of the solid fill.
     f:SetBackdrop({
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         edgeSize = 16,
         insets   = { left = 4, right = 4, top = 4, bottom = 4 },
     })
 
-    -- Column x positions (pixels from the left edge of the frame).
-    local X_LABEL   = 14   -- row label text starts here
-    local X_SESSION = 230  -- "Session" values right-align up to here
-    local X_OVERALL = 305  -- "Overall" values right-align up to here
-    local COL_W     = 60   -- width of each value column
+    local X_LABEL   = 12
+    local X_SESSION = 170
+    local X_OVERALL = 232
+    local COL_W     = 55
+    local curY      = -12
 
-    -- curY tracks the running y offset from the top of the frame.
-    local curY = -14
-
-    -- AddFullLine: a single label spanning nearly the full width.
-    -- Used for the title and subheader rows.
     local function AddFullLine(key, font)
         local fs = f:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
         fs:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-        fs:SetWidth(340)
+        fs:SetWidth(272)
         fs:SetJustifyH("LEFT")
         APT_Lines[key] = fs
-        curY = curY - 18
+        curY = curY - 16
         return fs
     end
 
-    -- AddDataRow: a row with a left-aligned label and two right-aligned
-    -- value columns (Session and Overall).
-    -- APT_Lines[key] is stored as { sess = FontString, over = FontString }.
     local function AddDataRow(key, labelText)
-        -- Label
         local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-        lbl:SetWidth(210)
+        lbl:SetWidth(155)
         lbl:SetJustifyH("LEFT")
         lbl:SetText(labelText)
 
-        -- Session value
         local sess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         sess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESSION, curY)
         sess:SetWidth(COL_W)
         sess:SetJustifyH("RIGHT")
         sess:SetText("0")
 
-        -- Overall value
         local over = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         over:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVERALL, curY)
         over:SetWidth(COL_W)
@@ -548,24 +425,15 @@ local function CreateUI()
         over:SetText("0")
 
         APT_Lines[key] = { sess = sess, over = over }
-        curY = curY - 18
+        curY = curY - 16
     end
 
-    -- ---- Build frame content ----
-
-    -- Title
     local title = AddFullLine("title", "GameFontNormalLarge")
     title:SetText("Alchemy Proc Tracker")
-    title:SetTextColor(1, 0.85, 0)  -- gold
+    title:SetTextColor(1, 0.85, 0)
 
-    -- Subheader: current group and specialization
-    local sub = AddFullLine("subhead", "GameFontNormal")
-    sub:SetText("Group: ELIXIR  |  Spec: None")
-    sub:SetTextColor(0.75, 0.75, 0.75)
+    curY = curY - 2
 
-    curY = curY - 4  -- small gap before column headers
-
-    -- Column headers (manual placement, not a data row).
     local hSess = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESSION, curY)
     hSess:SetWidth(COL_W)
@@ -580,60 +448,44 @@ local function CreateUI()
     hOver:SetText("Overall")
     hOver:SetTextColor(1, 0.9, 0.1)
 
-    curY = curY - 18
+    curY = curY - 16
 
-    -- Proc count rows
-    AddDataRow("procs1", "1x Proc  (+1 extra):")
-    AddDataRow("procs2", "2x Proc  (+2 extra):")
-    AddDataRow("procs3", "3x Proc  (+3 extra):")
-    AddDataRow("procs4", "4x Proc  (+4 extra):")
+    AddDataRow("procs1", "x1 Proc:")
+    AddDataRow("procs2", "x2 Proc:")
+    AddDataRow("procs3", "x3 Proc:")
+    AddDataRow("procs4", "x4 Proc:")
 
-    curY = curY - 6  -- gap
+    curY = curY - 4
 
-    -- Summary rows
     AddDataRow("crafts",  "Total Crafts:")
     AddDataRow("potions", "Total Items Produced:")
+    AddDataRow("extra",   "Total Extra Items:")
     AddDataRow("pct",     "Percent Gain:")
 
-    curY = curY - 6  -- gap
+    curY = curY - 4
 
-    -- Streak rows
     AddDataRow("streak",  "No-Proc Streak:")
     AddDataRow("longest", "Longest No-Proc Streak:")
 
-    -- Close button pinned to the top-right corner.
     local btn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     btn:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
 end
 
 -- ============================================================
 -- APT_RefreshUI
--- Updates every FontString in the window with current data.
--- Called after each craft finalization and after a reset.
--- Returns early (silently) when the window is hidden.
+-- Updates every FontString with current data from db.char.
 -- ============================================================
 
 APT_RefreshUI = function()
     if not APT_Frame or not APT_Frame:IsShown() then return end
 
-    local key = GetCharacterKey()
-    if not AlchemyProcTrackerDB or not AlchemyProcTrackerDB.characters then return end
-    local charDB = AlchemyProcTrackerDB.characters[key]
-    if not charDB then return end
-
-    local spec       = charDB.specialization.current or "None"
-    local groupStats = charDB.stats[displayGroup]
+    local char       = APT.db.char
+    local groupStats = char.stats[displayGroup]
     if not groupStats then return end
 
     local se = groupStats.session
     local ov = groupStats.overall
 
-    -- Update subheader to reflect current group and spec.
-    APT_Lines["subhead"]:SetText(
-        string.format("Group: %s  |  Spec: %s", displayGroup, spec)
-    )
-
-    -- Helper: update the session and overall columns for one data row.
     local function SetRow(key, sVal, oVal)
         local row = APT_Lines[key]
         if row then
@@ -648,106 +500,65 @@ APT_RefreshUI = function()
     SetRow("procs4",  se.procs4,              ov.procs4)
     SetRow("crafts",  se.totalCrafts,         ov.totalCrafts)
     SetRow("potions", se.totalPotions,        ov.totalPotions)
+    SetRow("extra",   se.totalExtra,          ov.totalExtra)
     SetRow("pct",     CalcPctGain(se),        CalcPctGain(ov))
     SetRow("streak",  se.currentNoProcStreak, ov.currentNoProcStreak)
     SetRow("longest", se.longestNoProcStreak, ov.longestNoProcStreak)
 end
 
 -- ============================================================
--- Minimap Button
--- A small draggable button on the minimap edge that toggles the
--- stats window. The last angle is saved in the saved variables
--- so it persists across sessions (stored at the top level of
--- AlchemyProcTrackerDB, not per-character).
+-- Minimap Button (LibDBIcon-1.0 + LibDataBroker-1.1)
+-- These are not part of Ace3 — embed them separately if needed.
+-- The `true` second arg to LibStub silences the error if missing.
+-- Created inside OnInitialize to follow Ace3 lifecycle conventions.
 -- ============================================================
 
-local function PositionMinimapButton(btn, angle)
-    local rad = math.rad(angle)
-    btn:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(rad), 80 * math.sin(rad))
-end
+local function RegisterMinimapButton()
+    local ldbLib    = LibStub("LibDataBroker-1.1", true)
+    local LibDBIcon = LibStub("LibDBIcon-1.0", true)
+    if not ldbLib or not LibDBIcon then return end
 
-local function CreateMinimapButton()
-    -- Ensure the angle key exists at the top-level DB.
-    if not AlchemyProcTrackerDB.minimapAngle then
-        AlchemyProcTrackerDB.minimapAngle = 45
-    end
-
-    local btn = CreateFrame("Button", "AlchemyTrackerMinimapButton", Minimap)
-    btn:SetSize(31, 31)
-    btn:SetFrameStrata("MEDIUM")
-    btn:SetFrameLevel(8)
-    btn:EnableMouse(true)
-    btn:RegisterForDrag("LeftButton")
-    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
-
-    local icon = btn:CreateTexture(nil, "ARTWORK")
-    icon:SetTexture("Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-300x300CroppedExtracted_dxt5.blp")
-    icon:SetAllPoints(btn)
-
-    local border = btn:CreateTexture(nil, "OVERLAY")
-    border:SetSize(54, 54)
-    border:SetPoint("TOPLEFT", btn, "TOPLEFT", -11, 11)
-    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-
-    PositionMinimapButton(btn, AlchemyProcTrackerDB.minimapAngle)
-
-    -- Drag: recalculate angle from cursor position relative to minimap centre.
-    btn:SetScript("OnDragStart", function(self)
-        self:SetScript("OnUpdate", function(self)
-            local mx, my = Minimap:GetCenter()
-            local cx, cy = GetCursorPosition()
-            local scale  = UIParent:GetEffectiveScale()
-            local angle  = math.deg(math.atan2((cy / scale) - my, (cx / scale) - mx))
-            AlchemyProcTrackerDB.minimapAngle = angle
-            PositionMinimapButton(self, angle)
-        end)
-    end)
-    btn:SetScript("OnDragStop", function(self)
-        self:SetScript("OnUpdate", nil)
-    end)
-
-    -- Click: toggle the stats window.
-    btn:SetScript("OnClick", function()
-        if APT_Frame then
-            if APT_Frame:IsShown() then
-                APT_Frame:Hide()
-            else
-                APT_Frame:Show()
-                APT_RefreshUI()
+    local ldb = ldbLib:NewDataObject("AlchemyTracker", {
+        type = "launcher",
+        text = "Alchemy Tracker",
+        icon = "Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-300x300CroppedExtracted_uncompressed",
+        OnClick = function(self, button)
+            if APT_Frame then
+                if APT_Frame:IsShown() then
+                    APT_Frame:Hide()
+                else
+                    APT_Frame:Show()
+                    APT_RefreshUI()
+                end
             end
-        end
-    end)
+        end,
+        OnTooltipShow = function(tooltip)
+            tooltip:AddLine("Alchemy Tracker")
+            tooltip:AddLine("Click to toggle stats window", 1, 1, 1)
+            tooltip:AddLine("Drag to reposition", 0.6, 0.6, 0.6)
+        end,
+    })
 
-    btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("Alchemy Tracker")
-        GameTooltip:AddLine("Click to toggle stats window", 1, 1, 1)
-        GameTooltip:AddLine("Drag to reposition", 0.6, 0.6, 0.6)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
+    LibDBIcon:Register("AlchemyTracker", ldb, APT.db.global.minimap)
 end
 
 -- ============================================================
--- HandleSlashCommand
--- Processes all /apt sub-commands.
+-- Slash Command Handler (registered via AceConsole)
 -- ============================================================
 
-local function HandleSlashCommand(input)
-    -- Trim leading and trailing whitespace.
+function APT:HandleSlashCommand(input)
     local cmd = input:match("^%s*(.-)%s*$")
 
     if cmd == "" or cmd:lower() == "help" then
         local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
         local ver   = (_meta and _meta(ADDON_NAME, "Version")) or "?"
-        print(string.format("|cff00ff00[Alchemy Tracker]|r v%s — TBC Classic alchemy mastery proc tracker", ver))
-        print("  |cffffd700/apt|r                                    — show this help")
-        print("  |cffffd700/apt show|r                               — open the stats window")
-        print("  |cffffd700/apt hide|r                               — close the stats window")
-        print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
-        print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
+        self:Print(string.format("v%s — TBC Classic alchemy mastery proc tracker", ver))
+        self:Print("  |cffffd700/apt|r                                    — show this help")
+        self:Print("  |cffffd700/apt show|r                               — open the stats window")
+        self:Print("  |cffffd700/apt hide|r                               — close the stats window")
+        self:Print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
+        self:Print("  |cffffd700/apt reset all|r                          — reset ALL stats including overall")
+        self:Print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
 
     elseif cmd:lower() == "show" then
         if APT_Frame then
@@ -756,102 +567,116 @@ local function HandleSlashCommand(input)
         end
 
     elseif cmd:lower() == "hide" then
-        if APT_Frame then
-            APT_Frame:Hide()
-        end
+        if APT_Frame then APT_Frame:Hide() end
 
     elseif cmd:lower() == "reset" then
         ResetSessionStats()
 
+    elseif cmd:lower() == "reset all" then
+        ResetAllStats()
+
+    elseif cmd:lower() == "debug" then
+        debugMode = not debugMode
+        self:Print("Debug mode: " .. (debugMode and "|cff00ff00ON|r — craft now to see event/message in chat." or "|cffff4444OFF|r"))
+
     else
-        -- Check for "group <NAME>" sub-command (case-insensitive).
         local groupArg = cmd:match("^[Gg][Rr][Oo][Uu][Pp]%s+(%a+)$")
         if groupArg then
             local g = groupArg:upper()
             if g == "FLASK" or g == "ELIXIR" or g == "POTION" or g == "TRANSMUTE" then
                 displayGroup = g
-                print(string.format(
-                    "|cff00ff00[Alchemy Tracker]|r Displaying group: %s", g
-                ))
+                self:Print(string.format("Displaying group: %s", g))
                 if APT_Frame and APT_Frame:IsShown() then
                     APT_RefreshUI()
                 end
             else
-                print("|cff00ff00[Alchemy Tracker]|r Unknown group. Valid groups: FLASK, ELIXIR, POTION, TRANSMUTE")
+                self:Print("Unknown group. Valid groups: FLASK, ELIXIR, POTION, TRANSMUTE")
             end
         else
-            print("|cff00ff00[Alchemy Tracker]|r Unknown command. Type /apt for help.")
+            self:Print("Unknown command. Type /apt for help.")
         end
     end
 end
 
 -- ============================================================
--- Main Event Frame
--- A single frame handles all events the addon needs.
+-- AceAddon Lifecycle
 -- ============================================================
 
-local eventFrame = CreateFrame("Frame")
+function APT:OnInitialize()
+    -- AceDB sets up SavedVariables with defaults and per-char scoping.
+    self.db = LibStub("AceDB-3.0"):New("AlchemyProcTrackerDB", defaults, true)
 
-eventFrame:SetScript("OnEvent", function(self, event, ...)
-    if event == "ADDON_LOADED" then
-        -- ADDON_LOADED fires for every addon; ignore others.
-        local addonName = ...
-        if addonName ~= ADDON_NAME then return end
+    BuildTrackedItemLookup()
+    CreateUI()
+    RegisterMinimapButton()
+    self:RegisterChatCommand("apt", "HandleSlashCommand")
+end
 
-        -- Saved variables are loaded by now.
-        -- Build the flat item lookup from AlchemyTrackerItems.lua first.
-        BuildTrackedItemLookup()
-        InitCharacterDB()
-        DetectAlchemySpecialization()
-        CreateUI()
-        CreateMinimapButton()
-        print("|cff00ff00[Alchemy Tracker]|r Loaded. Type /apt for help.")
+function APT:OnEnable()
+    DetectAlchemySpecialization()
 
-    elseif event == "PLAYER_LOGIN" then
-        -- After login, check if mastery is already known.
-        -- If found, no need to keep watching for it.
-        if DetectAlchemySpecialization() then
-            self:UnregisterEvent("SKILL_LINES_CHANGED")
-        end
+    self:RegisterEvent("PLAYER_LOGIN",        "OnPlayerLogin")
+    self:RegisterEvent("TRADE_SKILL_SHOW",    "OnTradeSkillShow")
+    self:RegisterEvent("SKILL_LINES_CHANGED", "OnSkillLinesChanged")
+    self:RegisterEvent("CHAT_MSG_SYSTEM",     "OnChatMessage")
+    self:RegisterEvent("CHAT_MSG_SKILL",      "OnChatMessage")
+    self:RegisterEvent("CHAT_MSG_LOOT",       "OnChatMessage")
+    self:RegisterEvent("TRADE_SKILL_CLOSE",   "OnTradeSkillClose")
 
-    elseif event == "TRADE_SKILL_SHOW" then
-        -- Re-check when the trade skill window opens (covers mid-session training).
-        if DetectAlchemySpecialization() then
-            self:UnregisterEvent("SKILL_LINES_CHANGED")
-        end
+    self:Print("Loaded. Type /apt for help.")
+end
 
-    elseif event == "SKILL_LINES_CHANGED" then
-        -- Fires when the player trains a new skill; check if mastery was just learned.
-        -- Once found, unregister to idle and stop polling.
-        if DetectAlchemySpecialization() then
-            self:UnregisterEvent("SKILL_LINES_CHANGED")
-        end
+-- ============================================================
+-- Event Handlers
+-- ============================================================
 
-    elseif event == "CHAT_MSG_SKILL" then
-        -- In TBC Classic, alchemy craft creation messages appear in the Skill
-        -- channel. If you find they do not trigger here, try CHAT_MSG_SYSTEM
-        -- instead (swap the name below and in RegisterEvent()).
-        -- verify: CHAT_MSG_SKILL vs CHAT_MSG_SYSTEM for creation messages in TBC Classic
-        local msg = ...
-        HandleCraftEvent(msg)
-
+function APT:OnPlayerLogin()
+    if DetectAlchemySpecialization() then
+        self:UnregisterEvent("SKILL_LINES_CHANGED")
     end
-end)
+end
 
--- Register all events the addon uses.
-eventFrame:RegisterEvent("ADDON_LOADED")
-eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("TRADE_SKILL_SHOW")
-eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
-eventFrame:RegisterEvent("CHAT_MSG_SKILL")
+function APT:OnTradeSkillShow()
+    -- Cancel the inactivity timer; window is open again.
+    if sessionTimer then
+        sessionTimer:Cancel()
+        sessionTimer = nil
+    end
 
--- If "You create" messages appear in the System channel instead of the Skill
--- channel, uncomment the line below and comment out CHAT_MSG_SKILL above:
--- eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
+    -- If the 15-min timeout already fired, start a fresh session now.
+    if sessionClosed then
+        sessionClosed = false
+        ResetSessionStats()
+        APT:Print("New session started (previous session expired).")
+    end
 
--- ============================================================
--- Slash Command Registration
--- ============================================================
+    if DetectAlchemySpecialization() then
+        self:UnregisterEvent("SKILL_LINES_CHANGED")
+    end
+end
 
-SLASH_ALCHEMYPROCTRACKER1 = "/apt"
-SlashCmdList["ALCHEMYPROCTRACKER"] = HandleSlashCommand
+function APT:OnSkillLinesChanged()
+    if DetectAlchemySpecialization() then
+        self:UnregisterEvent("SKILL_LINES_CHANGED")
+    end
+end
+
+function APT:OnChatMessage(event, msg)
+    if debugMode and msg and msg:find("You create") then
+        self:Print(string.format("|cffaaaaaa[DEBUG] event=%s msg=%s|r", event, msg))
+    end
+    HandleCraftEvent(msg)
+end
+
+function APT:OnTradeSkillClose()
+    -- Finalize any pending craft immediately when the window closes.
+    CancelCraftTimer()
+    FinalizeCraft()
+
+    -- Start the 15-minute inactivity timer.
+    if sessionTimer then sessionTimer:Cancel() end
+    sessionTimer = C_Timer.NewTimer(SESSION_TIMEOUT, function()
+        sessionTimer  = nil
+        sessionClosed = true  -- session will reset on next TRADE_SKILL_SHOW
+    end)
+end
