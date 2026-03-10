@@ -54,6 +54,9 @@ local debugMode   = false
 
 local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
 local SESSION_TIMEOUT = 900   -- 15 minutes: if alchemy window stays closed this long, new session starts next open
+local MAX_SESSIONS    = 200   -- maximum number of past sessions to keep in history
+
+local selectedSessionIndex = 1  -- which past session is selected in the options panel
 
 local currentCraft  = nil
 local craftTimer    = nil   -- C_Timer handle for finalizing the current craft
@@ -113,6 +116,7 @@ local defaults = {
             POTION    = newGroupDefaults(),
             TRANSMUTE = newGroupDefaults(),
         },
+        sessions = {},  -- history of past sessions, newest first; max MAX_SESSIONS entries
     },
 }
 
@@ -333,10 +337,55 @@ local function HandleCraftEvent(msg)
 end
 
 -- ============================================================
+-- SaveCurrentSession
+-- Snapshots session stats into db.char.sessions before a reset.
+-- Does nothing if the session had no crafts.
+-- ============================================================
+
+local function SaveCurrentSession()
+    if not APT.db or not APT.db.char then return end
+    if not APT.db.char.sessions then APT.db.char.sessions = {} end
+
+    -- Only save if at least one craft happened this session.
+    local hasActivity = false
+    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+        local gs = APT.db.char.stats[group]
+        if gs and gs.session.totalCrafts > 0 then
+            hasActivity = true
+            break
+        end
+    end
+    if not hasActivity then return end
+
+    -- Build snapshot: copy session stats for each group.
+    local snapshot = { date = date("%Y-%m-%d %H:%M"), stats = {} }
+    for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
+        local s = APT.db.char.stats[group].session
+        snapshot.stats[group] = {
+            totalCrafts         = s.totalCrafts,
+            totalPotions        = s.totalPotions,
+            totalExtra          = s.totalExtra,
+            procs1              = s.procs1,
+            procs2              = s.procs2,
+            procs3              = s.procs3,
+            procs4              = s.procs4,
+            longestNoProcStreak = s.longestNoProcStreak,
+        }
+    end
+
+    -- Prepend (newest first) and trim to MAX_SESSIONS.
+    table.insert(APT.db.char.sessions, 1, snapshot)
+    while #APT.db.char.sessions > MAX_SESSIONS do
+        table.remove(APT.db.char.sessions)
+    end
+end
+
+-- ============================================================
 -- ResetSessionStats
 -- ============================================================
 
 local function ResetSessionStats()
+    SaveCurrentSession()
     for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
         if APT.db.char.stats[group] then
             APT.db.char.stats[group].session = newStatsDefaults()
@@ -347,6 +396,7 @@ local function ResetSessionStats()
 end
 
 local function ResetAllStats()
+    SaveCurrentSession()
     for _, group in ipairs({ "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }) do
         if APT.db.char.stats[group] then
             APT.db.char.stats[group].session = newStatsDefaults()
@@ -518,6 +568,59 @@ local function OpenOptions()
     end
 end
 
+-- ============================================================
+-- Helpers for options panel stats display
+-- ============================================================
+
+local GROUPS_ORDER = { "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }
+
+local function FormatGroupStats(s, groupName)
+    if s.totalCrafts == 0 then
+        return string.format("|cffffd700%s:|r  No data", groupName)
+    end
+    return string.format(
+        "|cffffd700%s:|r  %d crafts  •  %d items produced  •  +%d extra  (%s)\n"
+        .. "    Procs:  x1=%d  x2=%d  x3=%d  x4+=%d  |  Longest no-proc streak: %d",
+        groupName,
+        s.totalCrafts, s.totalPotions, s.totalExtra, CalcPctGain(s),
+        s.procs1, s.procs2, s.procs3, s.procs4,
+        s.longestNoProcStreak
+    )
+end
+
+local function BuildOverallDescription()
+    if not APT.db then return "" end
+    local lines = {}
+    for _, g in ipairs(GROUPS_ORDER) do
+        local gs = APT.db.char.stats[g]
+        if gs then
+            lines[#lines + 1] = FormatGroupStats(gs.overall, g)
+        end
+    end
+    return table.concat(lines, "\n\n")
+end
+
+local function BuildSessionDescription(idx)
+    if not APT.db then return "" end
+    local sessions = APT.db.char.sessions
+    if not sessions or #sessions == 0 then return "" end
+    local sess = sessions[idx]
+    if not sess or not sess.stats then return "" end
+    local lines = {}
+    for _, g in ipairs(GROUPS_ORDER) do
+        local s = sess.stats[g]
+        if s and s.totalCrafts > 0 then
+            lines[#lines + 1] = FormatGroupStats(s, g)
+        end
+    end
+    if #lines == 0 then return "No crafts recorded in this session." end
+    return table.concat(lines, "\n\n")
+end
+
+-- ============================================================
+-- RegisterOptions
+-- ============================================================
+
 local function RegisterOptions()
     local AceConfig       = LibStub("AceConfig-3.0", true)
     local AceConfigDialog = LibStub("AceConfigDialog-3.0", true)
@@ -527,6 +630,7 @@ local function RegisterOptions()
         type = "group",
         name = "Alchemy Tracker",
         args = {
+            -- ── Window ──────────────────────────────────────────
             windowHeader = {
                 type  = "header",
                 name  = "Window",
@@ -546,31 +650,106 @@ local function RegisterOptions()
                 end,
                 order = 2,
             },
-            statsHeader = {
+
+            -- ── Overall Stats ────────────────────────────────────
+            overallHeader = {
                 type  = "header",
-                name  = "Stats",
-                order = 5,
+                name  = "Overall Stats",
+                order = 10,
+            },
+            overallDesc = {
+                type     = "description",
+                name     = function() return BuildOverallDescription() end,
+                fontSize = "medium",
+                order    = 11,
+            },
+
+            -- ── Session History ──────────────────────────────────
+            sessionHeader = {
+                type  = "header",
+                name  = "Session History",
+                order = 20,
+            },
+            sessionNoData = {
+                type   = "description",
+                name   = "No sessions recorded yet. Sessions are saved automatically when the 15-minute timeout fires or when you reset.",
+                order  = 21,
+                hidden = function()
+                    return APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0
+                end,
+            },
+            sessionSelect = {
+                type   = "select",
+                name   = "Session",
+                order  = 22,
+                hidden = function()
+                    return not (APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0)
+                end,
+                values = function()
+                    local t = {}
+                    local sessions = APT.db and APT.db.char.sessions or {}
+                    for i, sess in ipairs(sessions) do
+                        t[i] = string.format("[%d]  %s", i, sess.date)
+                    end
+                    return t
+                end,
+                sorting = function()
+                    local sessions = APT.db and APT.db.char.sessions or {}
+                    local t = {}
+                    for i = 1, #sessions do t[i] = i end
+                    return t
+                end,
+                get = function()
+                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
+                    if n == 0 then return nil end
+                    if selectedSessionIndex > n then selectedSessionIndex = 1 end
+                    return selectedSessionIndex
+                end,
+                set = function(_, val) selectedSessionIndex = val end,
+            },
+            sessionDetail = {
+                type     = "description",
+                name     = function()
+                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
+                    if n == 0 then return "" end
+                    if selectedSessionIndex > n then selectedSessionIndex = 1 end
+                    return BuildSessionDescription(selectedSessionIndex)
+                end,
+                fontSize = "medium",
+                order    = 23,
+                hidden   = function()
+                    return not (APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0)
+                end,
+            },
+
+            -- ── Reset ────────────────────────────────────────────
+            resetHeader = {
+                type  = "header",
+                name  = "Reset",
+                order = 30,
             },
             resetSession = {
                 type  = "execute",
                 name  = "Reset Session Stats",
-                desc  = "Reset session stats (overall is kept)  (/apt reset)",
+                desc  = "Save current session to history and reset session stats (overall is kept)  (/apt reset)",
                 func  = function() ResetSessionStats() end,
-                order = 6,
+                order = 31,
             },
             resetAll = {
                 type        = "execute",
                 name        = "Reset All Stats",
-                desc        = "Reset ALL stats including overall  (/apt reset all)",
+                desc        = "Reset ALL stats including overall — session history is kept  (/apt reset all)",
                 confirm     = true,
-                confirmText = "Are you sure you want to reset ALL stats, including overall?",
+                confirmText = "Are you sure you want to reset ALL stats, including overall? Session history will be kept.",
                 func        = function() ResetAllStats() end,
-                order       = 7,
+                order       = 32,
             },
+
+            -- ── Interface ────────────────────────────────────────
             interfaceHeader = {
                 type  = "header",
                 name  = "Interface",
-                order = 8,
+                order = 40,
             },
             minimapButton = {
                 type  = "toggle",
@@ -586,7 +765,7 @@ local function RegisterOptions()
                         end
                     end
                 end,
-                order = 9,
+                order = 41,
             },
             debugMode = {
                 type  = "toggle",
@@ -594,7 +773,7 @@ local function RegisterOptions()
                 desc  = "Enable debug chat output for craft events  (/apt debug)",
                 get   = function() return debugMode end,
                 set   = function(_, val) debugMode = val end,
-                order = 10,
+                order = 42,
             },
         },
     }
@@ -781,6 +960,9 @@ end
 function APT:OnInitialize()
     -- AceDB sets up SavedVariables with defaults and per-char scoping.
     self.db = LibStub("AceDB-3.0"):New("AlchemyProcTrackerDB", defaults, true)
+
+    -- Backwards-compat: existing chars won't have sessions from the default table.
+    if not self.db.char.sessions then self.db.char.sessions = {} end
 
     BuildTrackedItemLookup()
     CreateUI()
