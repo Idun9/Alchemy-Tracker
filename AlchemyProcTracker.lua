@@ -630,80 +630,68 @@ local function ShowMinimapMenu(anchor)
         APT_MinimapMenuFrame = CreateFrame("Frame", "APT_MinimapMenuFrame", UIParent, "UIDropDownMenuTemplate")
     end
 
-    local menuList = {
-        { text = "Alchemy Tracker", isTitle = true, notCheckable = true },
-        {
-            text          = "Show Stats Window",
-            notCheckable  = true,
-            func          = function()
-                if APT_Frame then APT_Frame:Show(); APT_RefreshUI() end
-            end,
-        },
-        {
-            text          = "Hide Stats Window",
-            notCheckable  = true,
-            func          = function()
-                if APT_Frame then APT_Frame:Hide() end
-            end,
-        },
-        { text = "Display Group", isTitle = true, notCheckable = true },
-        {
-            text          = "Flask",
-            notCheckable  = true,
-            func          = function()
-                displayGroup = "FLASK"
-                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
-            end,
-        },
-        {
-            text          = "Elixir",
-            notCheckable  = true,
-            func          = function()
-                displayGroup = "ELIXIR"
-                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
-            end,
-        },
-        {
-            text          = "Potion",
-            notCheckable  = true,
-            func          = function()
-                displayGroup = "POTION"
-                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
-            end,
-        },
-        {
-            text          = "Transmute",
-            notCheckable  = true,
-            func          = function()
-                displayGroup = "TRANSMUTE"
-                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
-            end,
-        },
-        { text = "Reset", isTitle = true, notCheckable = true },
-        {
-            text         = "Reset Session Stats",
-            notCheckable = true,
-            func         = function() ResetSessionStats() end,
-        },
-        {
-            text         = "Reset All Stats",
-            notCheckable = true,
-            func         = function() ResetAllStats() end,
-        },
-        { text = "Options", isTitle = true, notCheckable = true },
-        {
-            text         = "Open Options",
-            notCheckable = true,
-            func         = function() OpenOptions() end,
-        },
-        {
-            text         = "Close Menu",
-            notCheckable = true,
-            func         = function() CloseDropDownMenus() end,
-        },
-    }
+    UIDropDownMenu_Initialize(APT_MinimapMenuFrame, function()
+        local info
 
-    EasyMenu(menuList, APT_MinimapMenuFrame, anchor, 0, 0, "MENU")
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Alchemy Tracker"
+        info.isTitle = true
+        info.notCheckable = true
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Show Stats Window"
+        info.notCheckable = true
+        info.func = function()
+            if APT_Frame then APT_Frame:Show(); APT_RefreshUI() end
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Hide Stats Window"
+        info.notCheckable = true
+        info.func = function()
+            if APT_Frame then APT_Frame:Hide() end
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Reset"
+        info.isTitle = true
+        info.notCheckable = true
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Reset Session Stats"
+        info.notCheckable = true
+        info.func = function()
+            ResetSessionStats()
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Reset All Stats"
+        info.notCheckable = true
+        info.func = function()
+            ResetAllStats()
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
+        info.text = "Open Options"
+        info.notCheckable = true
+        info.func = function()
+            OpenOptions()
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+    end, "MENU")
+
+    ToggleDropDownMenu(1, nil, APT_MinimapMenuFrame, anchor, 0, 0)
 end
 
 -- ============================================================
@@ -740,7 +728,6 @@ local function RegisterMinimapButton()
             tooltip:AddLine("Alchemy Tracker")
             tooltip:AddLine("Left-click to toggle stats window", 1, 1, 1)
             tooltip:AddLine("Right-click for options menu", 1, 1, 1)
-            tooltip:AddLine("Drag to reposition", 0.6, 0.6, 0.6)
         end,
     })
 
