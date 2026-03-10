@@ -41,7 +41,8 @@ local TrackedItems = {}
 local displayGroup = "ELIXIR"
 local APT_Frame
 local APT_Lines   = {}
-local APT_RefreshUI  -- forward declaration; assigned after CreateUI
+local APT_RefreshUI      -- forward declaration; assigned after CreateUI
+local APT_RefreshHistory -- forward declaration; assigned after CreateHistoryUI
 local debugMode   = false
 
 -- ============================================================
@@ -55,8 +56,6 @@ local debugMode   = false
 local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
 local SESSION_TIMEOUT = 900   -- 15 minutes: if alchemy window stays closed this long, new session starts next open
 local MAX_SESSIONS    = 200   -- maximum number of past sessions to keep in history
-
-local selectedSessionIndex = 1  -- which past session is selected in the options panel
 
 local currentCraft  = nil
 local craftTimer    = nil   -- C_Timer handle for finalizing the current craft
@@ -165,6 +164,8 @@ end
 -- ============================================================
 -- CalcPctGain
 -- ============================================================
+
+local GROUPS_ORDER = { "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }
 
 local function CalcPctGain(s)
     if s.totalPotions > 0 then
@@ -429,6 +430,310 @@ local function ResetAllStats()
 end
 
 -- ============================================================
+-- Session History Browser
+-- Collapsible tree: Sessions → Groups → Items, plus Overall.
+-- ============================================================
+
+local APT_HistoryFrame
+local expandedSessions = {}
+
+local H_W        = 480
+local H_H        = 420
+local H_ROW      = 18
+local H_ARROW    = 8
+local H_LABEL    = 26
+local H_BASE     = 290
+local H_TOTAL    = 348
+local H_PCT      = 400
+local H_COL_W    = 52
+local H_MAX_ROWS = 120
+
+local function CreateHistoryUI()
+    local f = CreateFrame("Frame", "APT_HistoryFrame", UIParent, "BackdropTemplate")
+    f:SetSize(H_W, H_H)
+    f:SetPoint("CENTER")
+    f:SetFrameStrata("HIGH")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetClampedToScreen(true)
+    f:Hide()
+    APT_HistoryFrame = f
+
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(f)
+    bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    bg:SetVertexColor(0.08, 0.10, 0.20)
+    bg:SetAlpha(0.95)
+    f:SetBackdrop({
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        edgeSize = 16,
+        insets   = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", f, "TOP", 0, -10)
+    title:SetText("Session History")
+    title:SetTextColor(1, 0.85, 0)
+
+    local function MakeColHead(txt, x)
+        local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        fs:SetPoint("TOPLEFT", f, "TOPLEFT", x, -32)
+        fs:SetWidth(H_COL_W)
+        fs:SetJustifyH("RIGHT")
+        fs:SetTextColor(0.9, 0.8, 0.1)
+        fs:SetText(txt)
+    end
+    MakeColHead("Base",  H_BASE)
+    MakeColHead("Total", H_TOTAL)
+    MakeColHead("Proc%", H_PCT)
+
+    local div = f:CreateTexture(nil, "ARTWORK")
+    div:SetPoint("TOPLEFT",  f, "TOPLEFT",  8,   -44)
+    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -24, -44)
+    div:SetHeight(1)
+    div:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    div:SetVertexColor(0.4, 0.4, 0.5, 0.6)
+
+    local sf = CreateFrame("ScrollFrame", "APT_HistorySF", f, "UIPanelScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,  -48)
+    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -24,  8)
+    f.sf = sf
+
+    local sc = CreateFrame("Frame", "APT_HistorySC", sf)
+    sc:SetSize(sf:GetWidth() or (H_W - 40), 10)
+    sf:SetScrollChild(sc)
+    f.sc = sc
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
+
+    -- Pre-create row pool.
+    f.rows = {}
+    for i = 1, H_MAX_ROWS do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetHeight(H_ROW)
+        row:Hide()
+
+        local rbg = row:CreateTexture(nil, "BACKGROUND")
+        rbg:SetAllPoints(row)
+        rbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        rbg:SetVertexColor(0, 0, 0, 0)
+        row.rbg = rbg
+
+        local btn = CreateFrame("Button", nil, row)
+        btn:SetAllPoints(row)
+        btn:SetScript("OnEnter", function() rbg:SetVertexColor(0.3, 0.3, 0.6, 0.25) end)
+        btn:SetScript("OnLeave", function()
+            rbg:SetVertexColor(row._r or 0, row._g or 0, row._b or 0, row._a or 0)
+        end)
+        row.btn = btn
+
+        local arrow = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        arrow:SetPoint("LEFT", row, "LEFT", H_ARROW, 0)
+        arrow:SetWidth(14)
+        arrow:SetJustifyH("LEFT")
+        row.arrow = arrow
+
+        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lbl:SetPoint("LEFT",  row, "LEFT", H_LABEL, 0)
+        lbl:SetPoint("RIGHT", row, "LEFT", H_BASE - 4, 0)
+        lbl:SetJustifyH("LEFT")
+        row.lbl = lbl
+
+        local base = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        base:SetPoint("LEFT", row, "LEFT", H_BASE, 0)
+        base:SetWidth(H_COL_W)
+        base:SetJustifyH("RIGHT")
+        row.base = base
+
+        local total = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        total:SetPoint("LEFT", row, "LEFT", H_TOTAL, 0)
+        total:SetWidth(H_COL_W)
+        total:SetJustifyH("RIGHT")
+        row.total = total
+
+        local pct = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        pct:SetPoint("LEFT", row, "LEFT", H_PCT, 0)
+        pct:SetWidth(H_COL_W)
+        pct:SetJustifyH("RIGHT")
+        row.pct = pct
+
+        f.rows[i] = row
+    end
+end
+
+APT_RefreshHistory = function()
+    if not APT_HistoryFrame or not APT_HistoryFrame:IsShown() then return end
+    if not APT.db then return end
+
+    local sc       = APT_HistoryFrame.sc
+    local rows     = APT_HistoryFrame.rows
+    local sessions = APT.db.char.sessions or {}
+
+    for _, r in ipairs(rows) do
+        r:Hide()
+        r.btn:SetScript("OnClick", nil)
+    end
+
+    local rowIdx = 0
+    local curY   = 0
+
+    local function SetRowBg(r, rr, gg, bb, aa)
+        r._r, r._g, r._b, r._a = rr, gg, bb, aa
+        r.rbg:SetVertexColor(rr, gg, bb, aa)
+    end
+
+    local function UseRow(height)
+        rowIdx = rowIdx + 1
+        local r = rows[rowIdx]
+        if not r then return nil end
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT",  sc, "TOPLEFT",  0, -curY)
+        r:SetPoint("TOPRIGHT", sc, "TOPRIGHT", 0, -curY)
+        r:SetHeight(height or H_ROW)
+        r.arrow:SetText("")
+        r.arrow:SetTextColor(1, 1, 1)
+        r.lbl:ClearAllPoints()
+        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL, 0)
+        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4, 0)
+        r.lbl:SetText("")
+        r.lbl:SetTextColor(1, 1, 1)
+        r.base:SetText("")  r.base:SetTextColor(1, 1, 1)
+        r.total:SetText("") r.total:SetTextColor(1, 1, 1)
+        r.pct:SetText("")   r.pct:SetTextColor(1, 1, 1)
+        SetRowBg(r, 0, 0, 0, 0)
+        r:Show()
+        curY = curY + (height or H_ROW)
+        return r
+    end
+
+    -- Combine per-group stats tables into one flat table for CalcPctGain.
+    local function CombineGroups(statsMap)
+        local s = { totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
+        for _, g in ipairs(GROUPS_ORDER) do
+            local gs = statsMap[g]
+            if gs then
+                s.totalCrafts  = s.totalCrafts  + gs.totalCrafts
+                s.totalPotions = s.totalPotions + gs.totalPotions
+                s.totalExtra   = s.totalExtra   + gs.totalExtra
+            end
+        end
+        return s
+    end
+
+    local function AddSessionHeader(label, key, combined)
+        local r = UseRow()
+        if not r then return end
+        local expanded = expandedSessions[key]
+        r.arrow:SetText(expanded and "▼" or "▶")
+        r.arrow:SetTextColor(1, 0.85, 0)
+        r.lbl:SetText(label)
+        r.lbl:SetTextColor(1, 0.85, 0)
+        if combined.totalCrafts > 0 then
+            r.base:SetText(tostring(combined.totalCrafts))
+            r.base:SetTextColor(1, 0.85, 0)
+            r.pct:SetText(CalcPctGain(combined))
+            r.pct:SetTextColor(1, 0.85, 0)
+        end
+        SetRowBg(r, 0.14, 0.16, 0.32, 0.8)
+        local k = key
+        r.btn:SetScript("OnClick", function()
+            expandedSessions[k] = not expandedSessions[k]
+            APT_RefreshHistory()
+        end)
+    end
+
+    local function AddGroupHeader(groupName, s)
+        local r = UseRow()
+        if not r then return end
+        r.lbl:ClearAllPoints()
+        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
+        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
+        r.lbl:SetText(groupName)
+        r.lbl:SetTextColor(0.53, 0.67, 1.0)
+        r.base:SetText(tostring(s.totalCrafts))
+        r.base:SetTextColor(0.55, 0.70, 1.0)
+        r.pct:SetText(CalcPctGain(s))
+        r.pct:SetTextColor(0.55, 0.70, 1.0)
+        SetRowBg(r, 0.10, 0.12, 0.26, 0.6)
+    end
+
+    local function AddItemRow(it)
+        local r = UseRow()
+        if not r then return end
+        r.lbl:ClearAllPoints()
+        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
+        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
+        r.lbl:SetText(it.name)
+        r.lbl:SetTextColor(0.80, 0.80, 0.80)
+        r.base:SetText(tostring(it.totalCrafts))
+        r.total:SetText(tostring(it.totalPotions))
+        r.pct:SetText(CalcPctGain(it))
+    end
+
+    local function AddTotalRow(combined)
+        local r = UseRow()
+        if not r then return end
+        r.lbl:ClearAllPoints()
+        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
+        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
+        r.lbl:SetText("|cffaaaaaa— Total —|r")
+        r.base:SetText(tostring(combined.totalCrafts))   r.base:SetTextColor(0.7, 0.7, 0.7)
+        r.total:SetText(tostring(combined.totalPotions)) r.total:SetTextColor(0.7, 0.7, 0.7)
+        r.pct:SetText(CalcPctGain(combined))             r.pct:SetTextColor(0.7, 0.7, 0.7)
+        SetRowBg(r, 0.08, 0.08, 0.15, 0.6)
+    end
+
+    local function RenderGroupItems(s)
+        if not s.items then return end
+        local sorted = {}
+        for _, it in pairs(s.items) do sorted[#sorted + 1] = it end
+        table.sort(sorted, function(a, b) return a.name < b.name end)
+        for _, it in ipairs(sorted) do AddItemRow(it) end
+    end
+
+    -- ── Past sessions (newest first) ──────────────────────────
+    for i, sess in ipairs(sessions) do
+        local key      = "sess_" .. i
+        local combined = CombineGroups(sess.stats or {})
+        AddSessionHeader(string.format("Session %d  —  %s", i, sess.date), key, combined)
+        if expandedSessions[key] then
+            for _, g in ipairs(GROUPS_ORDER) do
+                local s = sess.stats and sess.stats[g]
+                if s and s.totalCrafts > 0 then
+                    AddGroupHeader(g, s)
+                    RenderGroupItems(s)
+                end
+            end
+            AddTotalRow(combined)
+            curY = curY + 4
+        end
+    end
+
+    -- ── Overall (all-time) ────────────────────────────────────
+    local ovMap = {}
+    for _, g in ipairs(GROUPS_ORDER) do
+        ovMap[g] = APT.db.char.stats[g] and APT.db.char.stats[g].overall
+    end
+    local combinedOv = CombineGroups(ovMap)
+    AddSessionHeader("Overall", "overall", combinedOv)
+    if expandedSessions["overall"] then
+        for _, g in ipairs(GROUPS_ORDER) do
+            local ov = ovMap[g]
+            if ov and ov.totalCrafts > 0 then
+                AddGroupHeader(g, ov)
+            end
+        end
+        AddTotalRow(combinedOv)
+    end
+
+    sc:SetHeight(math.max(curY + 8, 10))
+end
+
+-- ============================================================
 -- CreateUI
 -- Builds the stats window once on OnInitialize. Hidden by default.
 -- ============================================================
@@ -593,8 +898,6 @@ end
 -- Helpers for options panel stats display
 -- ============================================================
 
-local GROUPS_ORDER = { "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }
-
 -- Group summary line: name, base crafts, proc chance.
 local function FormatGroupSummary(s, groupName)
     if s.totalCrafts == 0 then
@@ -602,24 +905,6 @@ local function FormatGroupSummary(s, groupName)
     end
     return string.format("|cffffd700%s:|r  %d crafts  •  %s proc chance",
         groupName, s.totalCrafts, CalcPctGain(s))
-end
-
--- Per-item lines sorted by name, indented under their group.
-local function FormatItemLines(items)
-    if not items then return {} end
-    -- Collect and sort by name.
-    local sorted = {}
-    for id, it in pairs(items) do
-        sorted[#sorted + 1] = it
-    end
-    table.sort(sorted, function(a, b) return a.name < b.name end)
-    local lines = {}
-    for _, it in ipairs(sorted) do
-        lines[#lines + 1] = string.format(
-            "  |cffaaaaaa%s:|r  %d base  •  %d produced  •  %s proc chance",
-            it.name, it.totalCrafts, it.totalPotions, CalcPctGain(it))
-    end
-    return lines
 end
 
 local function BuildOverallDescription()
@@ -631,26 +916,6 @@ local function BuildOverallDescription()
             lines[#lines + 1] = FormatGroupSummary(gs.overall, g)
         end
     end
-    return table.concat(lines, "\n")
-end
-
-local function BuildSessionDescription(idx)
-    if not APT.db then return "" end
-    local sessions = APT.db.char.sessions
-    if not sessions or #sessions == 0 then return "" end
-    local sess = sessions[idx]
-    if not sess or not sess.stats then return "" end
-    local lines = {}
-    for _, g in ipairs(GROUPS_ORDER) do
-        local s = sess.stats[g]
-        if s and s.totalCrafts > 0 then
-            lines[#lines + 1] = FormatGroupSummary(s, g)
-            for _, itemLine in ipairs(FormatItemLines(s.items)) do
-                lines[#lines + 1] = itemLine
-            end
-        end
-    end
-    if #lines == 0 then return "No crafts recorded in this session." end
     return table.concat(lines, "\n")
 end
 
@@ -707,56 +972,20 @@ local function RegisterOptions()
                 name  = "Session History",
                 order = 20,
             },
-            sessionNoData = {
-                type   = "description",
-                name   = "No sessions recorded yet. Sessions are saved automatically when the 15-minute timeout fires or when you reset.",
-                order  = 21,
-                hidden = function()
-                    return APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0
+            browseHistory = {
+                type  = "execute",
+                name  = function()
+                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
+                    return string.format("Browse Session History  (%d saved)", n)
                 end,
-            },
-            sessionSelect = {
-                type   = "select",
-                name   = "Session",
-                order  = 22,
-                hidden = function()
-                    return not (APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0)
-                end,
-                values = function()
-                    local t = {}
-                    local sessions = APT.db and APT.db.char.sessions or {}
-                    for i, sess in ipairs(sessions) do
-                        t[i] = string.format("[%d]  %s", i, sess.date)
+                desc  = "Open the session history browser  (/apt history)",
+                func  = function()
+                    if APT_HistoryFrame then
+                        APT_HistoryFrame:Show()
+                        APT_RefreshHistory()
                     end
-                    return t
                 end,
-                sorting = function()
-                    local sessions = APT.db and APT.db.char.sessions or {}
-                    local t = {}
-                    for i = 1, #sessions do t[i] = i end
-                    return t
-                end,
-                get = function()
-                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
-                    if n == 0 then return nil end
-                    if selectedSessionIndex > n then selectedSessionIndex = 1 end
-                    return selectedSessionIndex
-                end,
-                set = function(_, val) selectedSessionIndex = val end,
-            },
-            sessionDetail = {
-                type     = "description",
-                name     = function()
-                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
-                    if n == 0 then return "" end
-                    if selectedSessionIndex > n then selectedSessionIndex = 1 end
-                    return BuildSessionDescription(selectedSessionIndex)
-                end,
-                fontSize = "medium",
-                order    = 23,
-                hidden   = function()
-                    return not (APT.db and APT.db.char.sessions and #APT.db.char.sessions > 0)
-                end,
+                order = 21,
             },
 
             -- ── Reset ────────────────────────────────────────────
@@ -950,6 +1179,7 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt hide|r                               — close the stats window")
         self:Print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
         self:Print("  |cffffd700/apt reset all|r                          — reset ALL stats including overall")
+        self:Print("  |cffffd700/apt history|r                            — open the session history browser")
         self:Print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
 
     elseif cmd:lower() == "show" then
@@ -966,6 +1196,12 @@ function APT:HandleSlashCommand(input)
 
     elseif cmd:lower() == "reset all" then
         ResetAllStats()
+
+    elseif cmd:lower() == "history" then
+        if APT_HistoryFrame then
+            APT_HistoryFrame:Show()
+            APT_RefreshHistory()
+        end
 
     elseif cmd:lower() == "debug" then
         debugMode = not debugMode
@@ -1003,6 +1239,7 @@ function APT:OnInitialize()
 
     BuildTrackedItemLookup()
     CreateUI()
+    CreateHistoryUI()
     RegisterMinimapButton()
     RegisterOptions()
     self:RegisterChatCommand("apt", "HandleSlashCommand")
