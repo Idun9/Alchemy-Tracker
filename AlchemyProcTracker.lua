@@ -507,6 +507,206 @@ APT_RefreshUI = function()
 end
 
 -- ============================================================
+-- Options Panel (AceConfig-3.0 + AceConfigDialog-3.0)
+-- Registers under Interface > AddOns > Alchemy Tracker.
+-- ============================================================
+
+local function OpenOptions()
+    local AceConfigDialog = LibStub("AceConfigDialog-3.0", true)
+    if AceConfigDialog then
+        AceConfigDialog:Open("AlchemyTracker")
+    end
+end
+
+local function RegisterOptions()
+    local AceConfig       = LibStub("AceConfig-3.0", true)
+    local AceConfigDialog = LibStub("AceConfigDialog-3.0", true)
+    if not AceConfig or not AceConfigDialog then return end
+
+    local options = {
+        type = "group",
+        name = "Alchemy Tracker",
+        args = {
+            windowHeader = {
+                type  = "header",
+                name  = "Window",
+                order = 1,
+            },
+            showWindow = {
+                type  = "execute",
+                name  = "Show Stats Window",
+                desc  = "Open the stats window  (/apt show)",
+                func  = function()
+                    if APT_Frame then APT_Frame:Show(); APT_RefreshUI() end
+                end,
+                order = 2,
+            },
+            hideWindow = {
+                type  = "execute",
+                name  = "Hide Stats Window",
+                desc  = "Close the stats window  (/apt hide)",
+                func  = function()
+                    if APT_Frame then APT_Frame:Hide() end
+                end,
+                order = 3,
+            },
+            displayGroup = {
+                type   = "select",
+                name   = "Display Group",
+                desc   = "Switch the displayed group  (/apt group <name>)",
+                values = { FLASK = "Flask", ELIXIR = "Elixir", POTION = "Potion", TRANSMUTE = "Transmute" },
+                get    = function() return displayGroup end,
+                set    = function(_, val)
+                    displayGroup = val
+                    if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
+                end,
+                order  = 4,
+            },
+            statsHeader = {
+                type  = "header",
+                name  = "Stats",
+                order = 5,
+            },
+            resetSession = {
+                type  = "execute",
+                name  = "Reset Session Stats",
+                desc  = "Reset session stats (overall is kept)  (/apt reset)",
+                func  = function() ResetSessionStats() end,
+                order = 6,
+            },
+            resetAll = {
+                type        = "execute",
+                name        = "Reset All Stats",
+                desc        = "Reset ALL stats including overall  (/apt reset all)",
+                confirm     = true,
+                confirmText = "Are you sure you want to reset ALL stats, including overall?",
+                func        = function() ResetAllStats() end,
+                order       = 7,
+            },
+            interfaceHeader = {
+                type  = "header",
+                name  = "Interface",
+                order = 8,
+            },
+            minimapButton = {
+                type  = "toggle",
+                name  = "Show Minimap Button",
+                desc  = "Show or hide the minimap button",
+                get   = function() return not APT.db.global.minimap.hide end,
+                set   = function(_, val)
+                    APT.db.global.minimap.hide = not val
+                    local LibDBIcon = LibStub("LibDBIcon-1.0", true)
+                    if LibDBIcon then
+                        if val then LibDBIcon:Show("AlchemyTracker")
+                        else        LibDBIcon:Hide("AlchemyTracker")
+                        end
+                    end
+                end,
+                order = 9,
+            },
+            debugMode = {
+                type  = "toggle",
+                name  = "Debug Mode",
+                desc  = "Enable debug chat output for craft events  (/apt debug)",
+                get   = function() return debugMode end,
+                set   = function(_, val) debugMode = val end,
+                order = 10,
+            },
+        },
+    }
+
+    AceConfig:RegisterOptionsTable("AlchemyTracker", options)
+    AceConfigDialog:AddToBlizOptions("AlchemyTracker", "Alchemy Tracker")
+end
+
+-- ============================================================
+-- Minimap Right-Click Dropdown
+-- ============================================================
+
+local APT_MinimapMenuFrame
+
+local function ShowMinimapMenu(anchor)
+    if not APT_MinimapMenuFrame then
+        APT_MinimapMenuFrame = CreateFrame("Frame", "APT_MinimapMenuFrame", UIParent, "UIDropDownMenuTemplate")
+    end
+
+    local menuList = {
+        { text = "Alchemy Tracker", isTitle = true, notCheckable = true },
+        {
+            text          = "Show Stats Window",
+            notCheckable  = true,
+            func          = function()
+                if APT_Frame then APT_Frame:Show(); APT_RefreshUI() end
+            end,
+        },
+        {
+            text          = "Hide Stats Window",
+            notCheckable  = true,
+            func          = function()
+                if APT_Frame then APT_Frame:Hide() end
+            end,
+        },
+        { text = "Display Group", isTitle = true, notCheckable = true },
+        {
+            text          = "Flask",
+            notCheckable  = true,
+            func          = function()
+                displayGroup = "FLASK"
+                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
+            end,
+        },
+        {
+            text          = "Elixir",
+            notCheckable  = true,
+            func          = function()
+                displayGroup = "ELIXIR"
+                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
+            end,
+        },
+        {
+            text          = "Potion",
+            notCheckable  = true,
+            func          = function()
+                displayGroup = "POTION"
+                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
+            end,
+        },
+        {
+            text          = "Transmute",
+            notCheckable  = true,
+            func          = function()
+                displayGroup = "TRANSMUTE"
+                if APT_Frame and APT_Frame:IsShown() then APT_RefreshUI() end
+            end,
+        },
+        { text = "Reset", isTitle = true, notCheckable = true },
+        {
+            text         = "Reset Session Stats",
+            notCheckable = true,
+            func         = function() ResetSessionStats() end,
+        },
+        {
+            text         = "Reset All Stats",
+            notCheckable = true,
+            func         = function() ResetAllStats() end,
+        },
+        { text = "Options", isTitle = true, notCheckable = true },
+        {
+            text         = "Open Options",
+            notCheckable = true,
+            func         = function() OpenOptions() end,
+        },
+        {
+            text         = "Close Menu",
+            notCheckable = true,
+            func         = function() CloseDropDownMenus() end,
+        },
+    }
+
+    EasyMenu(menuList, APT_MinimapMenuFrame, anchor, 0, 0, "MENU")
+end
+
+-- ============================================================
 -- Minimap Button (LibDBIcon-1.0 + LibDataBroker-1.1)
 -- These are not part of Ace3 — embed them separately if needed.
 -- The `true` second arg to LibStub silences the error if missing.
@@ -523,18 +723,23 @@ local function RegisterMinimapButton()
         text = "Alchemy Tracker",
         icon = "Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-300x300CroppedExtracted_uncompressed",
         OnClick = function(self, button)
-            if APT_Frame then
-                if APT_Frame:IsShown() then
-                    APT_Frame:Hide()
-                else
-                    APT_Frame:Show()
-                    APT_RefreshUI()
+            if button == "RightButton" then
+                ShowMinimapMenu(self)
+            else
+                if APT_Frame then
+                    if APT_Frame:IsShown() then
+                        APT_Frame:Hide()
+                    else
+                        APT_Frame:Show()
+                        APT_RefreshUI()
+                    end
                 end
             end
         end,
         OnTooltipShow = function(tooltip)
             tooltip:AddLine("Alchemy Tracker")
-            tooltip:AddLine("Click to toggle stats window", 1, 1, 1)
+            tooltip:AddLine("Left-click to toggle stats window", 1, 1, 1)
+            tooltip:AddLine("Right-click for options menu", 1, 1, 1)
             tooltip:AddLine("Drag to reposition", 0.6, 0.6, 0.6)
         end,
     })
@@ -609,6 +814,7 @@ function APT:OnInitialize()
     BuildTrackedItemLookup()
     CreateUI()
     RegisterMinimapButton()
+    RegisterOptions()
     self:RegisterChatCommand("apt", "HandleSlashCommand")
 end
 
