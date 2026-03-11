@@ -38,7 +38,6 @@ local TrackedItems = {}
 -- UI state
 -- ============================================================
 
-local displayGroup = "ELIXIR"
 local APT_Frame
 local APT_Lines   = {}
 local APT_RefreshUI      -- forward declaration; assigned after CreateUI
@@ -574,8 +573,15 @@ local function CreateHistoryUI()
 end
 
 -- ============================================================
--- History UI helpers (module-level; no upvalues from refresh state)
+-- Shared UI helpers (module-level; no upvalues from refresh state)
 -- ============================================================
+
+-- FmtCell: formats a stats table as "N  +X.X%" for popup rows.
+-- Returns "—" when there are no crafts yet.
+local function FmtCell(s)
+    if not s or s.totalCrafts == 0 then return "—" end
+    return string.format("%d  %s", s.totalCrafts, CalcPctGain(s))
+end
 
 local function SetRowBg(r, rr, gg, bb, aa)
     r._r, r._g, r._b, r._a = rr, gg, bb, aa
@@ -752,7 +758,7 @@ end
 
 local function CreateUI()
     local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
-    f:SetSize(300, 230)
+    f:SetSize(310, 178)
     f:SetPoint("CENTER")
     f:SetFrameStrata("MEDIUM")
     f:SetMovable(true)
@@ -761,7 +767,6 @@ local function CreateUI()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetClampedToScreen(true)
-
     f:Hide()
     APT_Frame = f
 
@@ -777,83 +782,97 @@ local function CreateUI()
         insets   = { left = 4, right = 4, top = 4, bottom = 4 },
     })
 
-    local X_LABEL   = 12
-    local X_SESSION = 170
-    local X_OVERALL = 232
-    local COL_W     = 55
-    local curY      = -12
+    -- Layout constants.  Each value column shows "N  +X.X%" right-justified.
+    local X_LABEL = 12
+    local X_SESS  = 150
+    local W_SESS  = 80
+    local X_OVER  = 234
+    local W_OVER  = 68
+    local curY    = -14
 
-    local function AddFullLine(key, font)
-        local fs = f:CreateFontString(nil, "OVERLAY", font or "GameFontNormal")
-        fs:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-        fs:SetWidth(272)
-        fs:SetJustifyH("LEFT")
-        APT_Lines[key] = fs
-        curY = curY - 16
-        return fs
-    end
-
-    local function AddDataRow(key, labelText)
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-        lbl:SetWidth(155)
-        lbl:SetJustifyH("LEFT")
-        lbl:SetText(labelText)
-
-        local sess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        sess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESSION, curY)
-        sess:SetWidth(COL_W)
-        sess:SetJustifyH("RIGHT")
-        sess:SetText("0")
-
-        local over = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        over:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVERALL, curY)
-        over:SetWidth(COL_W)
-        over:SetJustifyH("RIGHT")
-        over:SetText("0")
-
-        APT_Lines[key] = { sess = sess, over = over }
-        curY = curY - 16
-    end
-
-    local title = AddFullLine("title", "GameFontNormalLarge")
+    -- Title
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
+    title:SetWidth(290)
+    title:SetJustifyH("LEFT")
     title:SetText("Alchemy Proc Tracker")
     title:SetTextColor(1, 0.85, 0)
+    curY = curY - 26
 
-    curY = curY - 2
-
+    -- Column headers
     local hSess = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESSION, curY)
-    hSess:SetWidth(COL_W)
+    hSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
+    hSess:SetWidth(W_SESS)
     hSess:SetJustifyH("RIGHT")
     hSess:SetText("Session")
     hSess:SetTextColor(1, 0.9, 0.1)
 
     local hOver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hOver:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVERALL, curY)
-    hOver:SetWidth(COL_W)
+    hOver:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
+    hOver:SetWidth(W_OVER)
     hOver:SetJustifyH("RIGHT")
     hOver:SetText("Overall")
     hOver:SetTextColor(1, 0.9, 0.1)
+    curY = curY - 20
 
-    curY = curY - 16
+    -- One row per group: label | "N  +X.X%" session | "N  +X.X%" overall
+    local function AddGroupRow(g)
+        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
+        lbl:SetWidth(130)
+        lbl:SetJustifyH("LEFT")
+        lbl:SetText(g)
 
-    AddDataRow("procs1", "x1 Proc:")
-    AddDataRow("procs2", "x2 Proc:")
-    AddDataRow("procs3", "x3 Proc:")
-    AddDataRow("procs4", "x4 Proc:")
+        local sess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        sess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
+        sess:SetWidth(W_SESS)
+        sess:SetJustifyH("RIGHT")
+        sess:SetText("—")
 
-    curY = curY - 4
+        local over = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        over:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
+        over:SetWidth(W_OVER)
+        over:SetJustifyH("RIGHT")
+        over:SetText("—")
 
-    AddDataRow("crafts",  "Total Crafts:")
-    AddDataRow("potions", "Total Items Produced:")
-    AddDataRow("extra",   "Total Extra Items:")
-    AddDataRow("pct",     "Percent Gain:")
+        APT_Lines[g] = { sess = sess, over = over }
+        curY = curY - 18
+    end
 
-    curY = curY - 4
+    for _, g in ipairs(GROUPS_ORDER) do
+        AddGroupRow(g)
+    end
 
-    AddDataRow("streak",  "No-Proc Streak:")
-    AddDataRow("longest", "Longest No-Proc Streak:")
+    -- Divider
+    local div = f:CreateTexture(nil, "ARTWORK")
+    div:SetPoint("TOPLEFT",  f, "TOPLEFT",  X_LABEL, curY - 4)
+    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8,      curY - 4)
+    div:SetHeight(1)
+    div:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    div:SetVertexColor(0.4, 0.4, 0.5, 0.6)
+    curY = curY - 10
+
+    -- Total row
+    local totalLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    totalLbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
+    totalLbl:SetWidth(130)
+    totalLbl:SetJustifyH("LEFT")
+    totalLbl:SetText("Total")
+    totalLbl:SetTextColor(0.75, 0.75, 0.75)
+
+    local totalSess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    totalSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
+    totalSess:SetWidth(W_SESS)
+    totalSess:SetJustifyH("RIGHT")
+    totalSess:SetText("—")
+
+    local totalOver = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    totalOver:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
+    totalOver:SetWidth(W_OVER)
+    totalOver:SetJustifyH("RIGHT")
+    totalOver:SetText("—")
+
+    APT_Lines["total"] = { sess = totalSess, over = totalOver }
 
     local btn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     btn:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
@@ -867,31 +886,32 @@ end
 APT_RefreshUI = function()
     if not APT_Frame or not APT_Frame:IsShown() then return end
 
-    local char       = APT.db.char
-    local groupStats = char.stats[displayGroup]
-    if not groupStats then return end
-
-    local se = groupStats.session
-    local ov = groupStats.overall
-
-    local function SetRow(key, sVal, oVal)
-        local row = APT_Lines[key]
-        if row then
-            row.sess:SetText(tostring(sVal))
-            row.over:SetText(tostring(oVal))
+    local stats   = APT.db.char.stats
+    local sessMap = {}
+    local overMap = {}
+    for _, g in ipairs(GROUPS_ORDER) do
+        local gs = stats[g]
+        if gs then
+            sessMap[g] = gs.session
+            overMap[g] = gs.overall
         end
     end
 
-    SetRow("procs1",  se.procs1,              ov.procs1)
-    SetRow("procs2",  se.procs2,              ov.procs2)
-    SetRow("procs3",  se.procs3,              ov.procs3)
-    SetRow("procs4",  se.procs4,              ov.procs4)
-    SetRow("crafts",  se.totalCrafts,         ov.totalCrafts)
-    SetRow("potions", se.totalPotions,        ov.totalPotions)
-    SetRow("extra",   se.totalExtra,          ov.totalExtra)
-    SetRow("pct",     CalcPctGain(se),        CalcPctGain(ov))
-    SetRow("streak",  se.currentNoProcStreak, ov.currentNoProcStreak)
-    SetRow("longest", se.longestNoProcStreak, ov.longestNoProcStreak)
+    -- Per-group rows
+    for _, g in ipairs(GROUPS_ORDER) do
+        local row = APT_Lines[g]
+        if row then
+            row.sess:SetText(FmtCell(sessMap[g]))
+            row.over:SetText(FmtCell(overMap[g]))
+        end
+    end
+
+    -- Total row
+    local totalRow = APT_Lines["total"]
+    if totalRow then
+        totalRow.sess:SetText(FmtCell(CombineGroups(sessMap)))
+        totalRow.over:SetText(FmtCell(CombineGroups(overMap)))
+    end
 end
 
 -- ============================================================
@@ -1193,7 +1213,6 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
         self:Print("  |cffffd700/apt reset all|r                          — reset ALL stats including overall")
         self:Print("  |cffffd700/apt history|r                            — open the session history browser")
-        self:Print("  |cffffd700/apt group|r |cffaaaaaa<FLASK|ELIXIR|POTION|TRANSMUTE>|r  — switch displayed group")
 
     elseif cmdLower == "show" then
         if APT_Frame then
@@ -1221,21 +1240,7 @@ function APT:HandleSlashCommand(input)
         self:Print("Debug mode: " .. (debugMode and "|cff00ff00ON|r — craft now to see event/message in chat." or "|cffff4444OFF|r"))
 
     else
-        local groupArg = cmdLower:match("^group%s+(%a+)$")
-        if groupArg then
-            local g = groupArg:upper()
-            if g == "FLASK" or g == "ELIXIR" or g == "POTION" or g == "TRANSMUTE" then
-                displayGroup = g
-                self:Print(string.format("Displaying group: %s", g))
-                if APT_Frame and APT_Frame:IsShown() then
-                    APT_RefreshUI()
-                end
-            else
-                self:Print("Unknown group. Valid groups: FLASK, ELIXIR, POTION, TRANSMUTE")
-            end
-        else
-            self:Print("Unknown command. Type /apt for help.")
-        end
+        self:Print("Unknown command. Type /apt for help.")
     end
 end
 
