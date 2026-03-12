@@ -132,6 +132,8 @@ local defaults = {
         },
         nextSessionID = 0,  -- monotonic counter; assigned to each saved session for stable UI keys
         sessions      = {},  -- history of past sessions, newest first; max MAX_SESSIONS entries
+        windowPos     = false,  -- saved position for the main stats window
+        historyPos    = false,  -- saved position for the session history window
     },
 }
 
@@ -437,6 +439,155 @@ local function ResetAllStats()
 end
 
 -- ============================================================
+-- Shared UI constants and helpers
+-- ============================================================
+
+local C_OR  = { 1,    0.55, 0.10        }   -- orange accent
+local C_ORD = { 0.70, 0.33, 0.05        }   -- dark orange (button normal)
+local C_DIV = { 0.40, 0.22, 0.03, 0.50  }   -- dim divider
+local C_GRN = { 0.20, 0.85, 0.50        }   -- green for % values
+
+local function DrawBorders(frame)
+    -- All borders use child frames to avoid scissor-rect clipping at parent edges.
+    local function MakeLine(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
+        local b = CreateFrame("Frame", nil, frame)
+        b:SetPoint(p1, frame, rp1, x1, y1)
+        b:SetPoint(p2, frame, rp2, x2, y2)
+        if isH then b:SetHeight(1) else b:SetWidth(1) end
+        local t = b:CreateTexture(nil, "BACKGROUND")
+        t:SetAllPoints(b)
+        t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        t:SetVertexColor(C_OR[1], C_OR[2], C_OR[3])
+    end
+    MakeLine("TOPLEFT","TOPLEFT",0,0,       "TOPRIGHT","TOPRIGHT",0,0,       true)   -- top
+    MakeLine("BOTTOMLEFT","BOTTOMLEFT",0,0, "BOTTOMRIGHT","BOTTOMRIGHT",0,0, true)   -- bottom
+    MakeLine("TOPLEFT","TOPLEFT",0,0,       "BOTTOMLEFT","BOTTOMLEFT",0,0,   false)  -- left
+    MakeLine("TOPRIGHT","TOPRIGHT",-1,0,    "BOTTOMRIGHT","BOTTOMRIGHT",-1,0,false)  -- right
+end
+
+local function MakeNavButton(parent, label, w, h, onClick)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(w, h)
+    local bbg = btn:CreateTexture(nil, "BACKGROUND")
+    bbg:SetAllPoints(btn)
+    bbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    bbg:SetVertexColor(C_ORD[1], C_ORD[2], C_ORD[3])
+    btn._bbg = bbg
+    local btxt = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btxt:SetAllPoints(btn)
+    btxt:SetText(label)
+    btxt:SetTextColor(1, 1, 1)
+    btn:SetScript("OnEnter", function() bbg:SetVertexColor(C_OR[1], C_OR[2], C_OR[3]) end)
+    btn:SetScript("OnLeave", function() bbg:SetVertexColor(C_ORD[1], C_ORD[2], C_ORD[3]) end)
+    btn:SetScript("OnClick", onClick or function() end)
+    return btn
+end
+
+local function MakeFrameCloseButton(parent)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(18, 18)
+    btn:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -8)
+    local cbg = btn:CreateTexture(nil, "BACKGROUND")
+    cbg:SetAllPoints(btn)
+    cbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    cbg:SetVertexColor(0.60, 0.08, 0.08)
+    local cx = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    cx:SetAllPoints(btn)
+    cx:SetText("X")
+    cx:SetTextColor(1, 1, 1)
+    btn:SetScript("OnEnter", function() cbg:SetVertexColor(0.90, 0.20, 0.20) end)
+    btn:SetScript("OnLeave", function() cbg:SetVertexColor(0.60, 0.08, 0.08) end)
+    btn:SetScript("OnClick", function() parent:Hide() end)
+    return btn
+end
+
+local function MakeDivider(parent, x1, y, x2)
+    local d = parent:CreateTexture(nil, "ARTWORK")
+    d:SetPoint("TOPLEFT",  parent, "TOPLEFT",  x1, y)
+    d:SetPoint("TOPRIGHT", parent, "TOPRIGHT", x2, y)
+    d:SetHeight(1)
+    d:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    d:SetVertexColor(C_DIV[1], C_DIV[2], C_DIV[3], C_DIV[4])
+    return d
+end
+
+-- ============================================================
+-- Session Rename Dialog
+-- ============================================================
+
+local APT_RenameFrame
+local APT_RenameTarget  -- sess object currently being renamed
+
+local function ShowRenameDialog(sess)
+    if not APT_RenameFrame then
+        local d = CreateFrame("Frame", "APT_RenameFrame", UIParent, "BackdropTemplate")
+        d:SetSize(300, 110)
+        d:SetFrameStrata("DIALOG")
+        d:SetMovable(true)
+        d:EnableMouse(true)
+        d:RegisterForDrag("LeftButton")
+        d:SetScript("OnDragStart", d.StartMoving)
+        d:SetScript("OnDragStop",  d.StopMovingOrSizing)
+        d:SetClampedToScreen(true)
+
+        local dbg = d:CreateTexture(nil, "BACKGROUND")
+        dbg:SetAllPoints(d)
+        dbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        dbg:SetVertexColor(0.07, 0.07, 0.07)
+        dbg:SetAlpha(0.97)
+        DrawBorders(d)
+
+        local title = d:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOPLEFT", d, "TOPLEFT", 10, -10)
+        title:SetText("Rename Session")
+        title:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+
+        local hint = d:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        hint:SetPoint("TOPLEFT", d, "TOPLEFT", 10, -26)
+        hint:SetText("Leave blank to restore the default name.")
+        hint:SetTextColor(0.50, 0.50, 0.50)
+
+        local eb = CreateFrame("EditBox", "APT_RenameEditBox", d, "InputBoxTemplate")
+        eb:SetSize(278, 22)
+        eb:SetPoint("TOP", d, "TOP", 0, -46)
+        eb:SetAutoFocus(false)
+        eb:SetMaxLetters(64)
+        d.eb = eb
+
+        local save = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+        save:SetSize(80, 22)
+        save:SetPoint("BOTTOMRIGHT", d, "BOTTOM", -4, 10)
+        save:SetText("Save")
+        save:SetScript("OnClick", function()
+            if APT_RenameTarget then
+                local name = d.eb:GetText():match("^%s*(.-)%s*$")
+                APT_RenameTarget.customName = (name ~= "") and name or nil
+                APT_RefreshHistory()
+            end
+            d:Hide()
+        end)
+
+        local cancel = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+        cancel:SetSize(80, 22)
+        cancel:SetPoint("BOTTOMLEFT", d, "BOTTOM", 4, 10)
+        cancel:SetText("Cancel")
+        cancel:SetScript("OnClick", function() d:Hide() end)
+
+        eb:SetScript("OnEscapePressed", function() d:Hide() end)
+        eb:SetScript("OnEnterPressed", function() save:Click() end)
+
+        APT_RenameFrame = d
+    end
+
+    APT_RenameTarget = sess
+    APT_RenameFrame.eb:SetText(sess.customName or "")
+    APT_RenameFrame:ClearAllPoints()
+    APT_RenameFrame:SetPoint("CENTER")
+    APT_RenameFrame:Show()
+    APT_RenameFrame.eb:SetFocus()
+end
+
+-- ============================================================
 -- Session History Browser
 -- Collapsible tree: Sessions → Groups → Items, plus Overall.
 -- ============================================================
@@ -444,78 +595,202 @@ end
 local APT_HistoryFrame
 local expandedSessions = {}
 
-local H_W        = 480
-local H_H        = 420
-local H_ROW      = 18
+local H_W        = 500
+local H_H        = 440
+local H_ROW      = 20
 local H_ARROW    = 8
 local H_LABEL    = 26
-local H_BASE     = 290
-local H_TOTAL    = 348
-local H_PCT      = 400
-local H_COL_W    = 52
+local H_BASE     = 305
+local H_TOTAL    = 365
+local H_PCT      = 420
+local H_COL_W    = 54
 local H_MAX_ROWS = 120
 
 local function CreateHistoryUI()
+    local DEF_W, DEF_H = H_W, H_H
+
     local f = CreateFrame("Frame", "APT_HistoryFrame", UIParent, "BackdropTemplate")
-    f:SetSize(H_W, H_H)
-    f:SetPoint("CENTER")
+    -- Default: left edge sits just right of screen centre; restored from DB if moved before.
+    local hp = APT.db.char.historyPos
+    f:SetSize(hp and hp.w or DEF_W, hp and hp.h or DEF_H)
+    if hp then
+        f:SetPoint(hp.point, UIParent, hp.relPoint or hp.point, hp.x, hp.y)
+    else
+        f:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
+    end
+    f._defW, f._defH = DEF_W, DEF_H
+
     f:SetFrameStrata("HIGH")
     f:SetMovable(true)
+    f:SetResizable(true)
+    f:SetToplevel(true)   -- auto-raise above sibling frames on click
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetScript("OnDragStop", function()
+        f:StopMovingOrSizing()
+        local point, _, relPoint, x, y = f:GetPoint()
+        APT.db.char.historyPos = { point=point, relPoint=relPoint, x=x, y=y,
+                                   w=f:GetWidth(), h=f:GetHeight() }
+    end)
     f:SetClampedToScreen(true)
     f:Hide()
     APT_HistoryFrame = f
 
+    -- Enforce minimum size live during drag (OnSizeChanged fires before the frame is finalised)
+    local _hClamp = false
+    f:SetScript("OnSizeChanged", function(self, w, h)
+        if _hClamp then return end
+        local nw = math.max(w, 380)
+        local nh = math.max(h, 200)
+        if nw ~= w or nh ~= h then
+            _hClamp = true
+            self:SetSize(nw, nh)
+            _hClamp = false
+        end
+    end)
+
+    -- Background
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(f)
     bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    bg:SetVertexColor(0.08, 0.10, 0.20)
-    bg:SetAlpha(0.95)
-    f:SetBackdrop({
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        edgeSize = 16,
-        insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
+    bg:SetVertexColor(0.07, 0.07, 0.07)
+    bg:SetAlpha(0.97)
+    DrawBorders(f)
 
+    -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", f, "TOP", 0, -10)
-    title:SetText("Session History")
-    title:SetTextColor(1, 0.85, 0)
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -12)
+    title:SetText("Crafting Session Tracker")
+    title:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
 
+    -- Subtitle
+    local sub = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sub:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -30)
+    sub:SetText("Track your alchemy proc rates and session statistics")
+    sub:SetTextColor(0.50, 0.50, 0.50)
+
+    -- Column headers
     local function MakeColHead(txt, x)
         local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        fs:SetPoint("TOPLEFT", f, "TOPLEFT", x, -32)
+        fs:SetPoint("TOPLEFT", f, "TOPLEFT", x, -46)
         fs:SetWidth(H_COL_W)
         fs:SetJustifyH("RIGHT")
-        fs:SetTextColor(0.9, 0.8, 0.1)
+        fs:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
         fs:SetText(txt)
     end
     MakeColHead("Base",  H_BASE)
     MakeColHead("Total", H_TOTAL)
     MakeColHead("Proc%", H_PCT)
 
-    local div = f:CreateTexture(nil, "ARTWORK")
-    div:SetPoint("TOPLEFT",  f, "TOPLEFT",  8,   -44)
-    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -24, -44)
-    div:SetHeight(1)
-    div:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    div:SetVertexColor(0.4, 0.4, 0.5, 0.6)
+    MakeDivider(f, 8, -58, -24)
 
-    local sf = CreateFrame("ScrollFrame", "APT_HistorySF", f, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,  -48)
-    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -24,  8)
+    -- Close button
+    MakeFrameCloseButton(f)
+
+    -- Custom scrollbar (themed track + draggable thumb)
+    local SB_W = 6
+    local sb = CreateFrame("Frame", nil, f)
+    sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -(4),            -62)
+    sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(4),              8)
+    sb:SetWidth(SB_W)
+
+    local sbTrack = sb:CreateTexture(nil, "BACKGROUND")
+    sbTrack:SetAllPoints(sb)
+    sbTrack:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    sbTrack:SetVertexColor(0.12, 0.12, 0.12)
+
+    local thumb = CreateFrame("Button", nil, sb)
+    thumb:SetWidth(SB_W)
+    thumb:SetHeight(40)
+    thumb:SetPoint("TOPLEFT", sb, "TOPLEFT", 0, 0)
+    thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, 0)
+    local thumbTex = thumb:CreateTexture(nil, "BACKGROUND")
+    thumbTex:SetAllPoints(thumb)
+    thumbTex:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    thumbTex:SetVertexColor(C_OR[1], C_OR[2], C_OR[3], 0.65)
+    thumb:SetScript("OnEnter", function() thumbTex:SetVertexColor(C_OR[1], C_OR[2], C_OR[3], 1) end)
+    thumb:SetScript("OnLeave", function() thumbTex:SetVertexColor(C_OR[1], C_OR[2], C_OR[3], 0.65) end)
+
+    -- Scroll frame (leaves right gutter for the custom scrollbar)
+    local sf = CreateFrame("ScrollFrame", "APT_HistorySF", f)
+    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,            -62)
+    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(SB_W + 8),    8)
+    sf:EnableMouseWheel(true)
     f.sf = sf
 
     local sc = CreateFrame("Frame", "APT_HistorySC", sf)
-    sc:SetSize(sf:GetWidth() or (H_W - 40), 10)
+    sc:SetSize(sf:GetWidth() or (H_W - 20), 10)
     sf:SetScrollChild(sc)
     f.sc = sc
 
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
+    -- Scrollbar update: reposition thumb to match current scroll
+    local function UpdateScrollbar()
+        local contentH = sc:GetHeight()
+        local viewH    = sf:GetHeight()
+        if contentH <= viewH or sf:GetVerticalScrollRange() == 0 then
+            thumb:Hide(); return
+        end
+        thumb:Show()
+        local trackH  = sb:GetHeight()
+        local thumbH  = math.max(20, trackH * (viewH / contentH))
+        local scrollPct = sf:GetVerticalScroll() / sf:GetVerticalScrollRange()
+        local offsetY   = (trackH - thumbH) * scrollPct
+        thumb:SetHeight(thumbH)
+        thumb:ClearAllPoints()
+        thumb:SetPoint("TOPLEFT",  sb, "TOPLEFT",  0, -offsetY)
+        thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, -offsetY)
+    end
+    f.UpdateScrollbar = UpdateScrollbar
+
+    -- Scroll via mousewheel
+    sf:SetScript("OnMouseWheel", function(self, delta)
+        local cur = self:GetVerticalScroll()
+        local max = self:GetVerticalScrollRange()
+        self:SetVerticalScroll(math.max(0, math.min(max, cur - delta * 20)))
+        UpdateScrollbar()
+    end)
+
+    -- Drag thumb to scroll
+    local dragStartY, dragStartScroll = 0, 0
+    thumb:RegisterForClicks("LeftButtonUp")
+    thumb:SetScript("OnMouseDown", function(_, btn)
+        if btn ~= "LeftButton" then return end
+        dragStartY      = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+        dragStartScroll = sf:GetVerticalScroll()
+        thumb:SetScript("OnUpdate", function()
+            local curY    = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+            local delta   = dragStartY - curY
+            local trackH  = sb:GetHeight()
+            local thumbH  = thumb:GetHeight()
+            local maxS    = sf:GetVerticalScrollRange()
+            if trackH > thumbH then
+                sf:SetVerticalScroll(math.max(0, math.min(maxS,
+                    dragStartScroll + delta * maxS / (trackH - thumbH))))
+                UpdateScrollbar()
+            end
+        end)
+    end)
+    thumb:SetScript("OnMouseUp", function()
+        thumb:SetScript("OnUpdate", nil)
+        UpdateScrollbar()
+    end)
+
+    -- Resize grip (bottom-right corner); saves size + position when done
+    local grip = CreateFrame("Button", nil, f)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+    grip:SetScript("OnMouseUp", function()
+        f:StopMovingOrSizing()
+        local point, _, relPoint, x, y = f:GetPoint()
+        APT.db.char.historyPos = { point=point, relPoint=relPoint, x=x, y=y,
+                                   w=f:GetWidth(), h=f:GetHeight() }
+        UpdateScrollbar()
+    end)
 
     -- Pre-create row pool.
     f.rows = {}
@@ -532,7 +807,8 @@ local function CreateHistoryUI()
 
         local btn = CreateFrame("Button", nil, row)
         btn:SetAllPoints(row)
-        btn:SetScript("OnEnter", function() rbg:SetVertexColor(0.3, 0.3, 0.6, 0.25) end)
+        btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        btn:SetScript("OnEnter", function() rbg:SetVertexColor(C_OR[1], C_OR[2], C_OR[3], 0.12) end)
         btn:SetScript("OnLeave", function()
             rbg:SetVertexColor(row._r or 0, row._g or 0, row._b or 0, row._a or 0)
         end)
@@ -602,6 +878,12 @@ local function CombineGroups(statsMap)
     return s
 end
 
+-- Proc% for history rows: extra potions per craft attempt (as %)
+local function CalcProcPct(s)
+    if not s or s.totalCrafts == 0 then return "—" end
+    return string.format("%.1f%%", s.totalExtra / s.totalCrafts * 100)
+end
+
 APT_RefreshHistory = function()
     if not APT_HistoryFrame or not APT_HistoryFrame:IsShown() then return end
     if not APT.db then return end
@@ -627,7 +909,7 @@ APT_RefreshHistory = function()
         r:SetPoint("TOPRIGHT", sc, "TOPRIGHT", 0, -curY)
         r:SetHeight(height or H_ROW)
         r.arrow:SetText("")
-        r.arrow:SetTextColor(1, 1, 1)
+        r.arrow:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL, 0)
         r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4, 0)
@@ -635,74 +917,136 @@ APT_RefreshHistory = function()
         r.lbl:SetTextColor(1, 1, 1)
         r.base:SetText("")  r.base:SetTextColor(1, 1, 1)
         r.total:SetText("") r.total:SetTextColor(1, 1, 1)
-        r.pct:SetText("")   r.pct:SetTextColor(1, 1, 1)
+        r.pct:SetText("")   r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
         SetRowBg(r, 0, 0, 0, 0)
         r:Show()
         curY = curY + (height or H_ROW)
         return r
     end
 
-    local function AddSessionHeader(label, key, combined)
-        local r = UseRow()
+    -- Overall Stats banner row (highlighted with orange left accent)
+    local function AddOverallBanner(combined)
+        local r = UseRow(22)
         if not r then return end
-        local expanded = expandedSessions[key]
+        local expanded = expandedSessions["overall"]
         r.arrow:SetText(expanded and "▼" or "▶")
-        r.arrow:SetTextColor(1, 0.85, 0)
-        r.lbl:SetText(label)
-        r.lbl:SetTextColor(1, 0.85, 0)
+        r.arrow:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+        r.lbl:SetText("Overall Stats")
+        r.lbl:SetTextColor(1, 1, 1)
+        r.lbl:SetFont(r.lbl:GetFont(), select(2, r.lbl:GetFont()) or 12, "OUTLINE")
         if combined.totalCrafts > 0 then
             r.base:SetText(tostring(combined.totalCrafts))
-            r.base:SetTextColor(1, 0.85, 0)
-            r.pct:SetText(CalcPctGain(combined))
-            r.pct:SetTextColor(1, 0.85, 0)
+            r.base:SetTextColor(1, 1, 1)
+            r.total:SetText(tostring(combined.totalPotions))
+            r.total:SetTextColor(1, 1, 1)
+            r.pct:SetText(CalcProcPct(combined))
+            r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
         end
-        SetRowBg(r, 0.14, 0.16, 0.32, 0.8)
-        local k = key
+        -- Orange-highlighted background
+        SetRowBg(r, C_OR[1] * 0.18, C_OR[2] * 0.18, C_OR[3] * 0.18, 0.90)
+        -- Orange left accent bar
+        if not r._accent then
+            local acc = r:CreateTexture(nil, "ARTWORK")
+            acc:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+            acc:SetVertexColor(C_OR[1], C_OR[2], C_OR[3])
+            acc:SetPoint("TOPLEFT",    r, "TOPLEFT",    0, 0)
+            acc:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", 0, 0)
+            acc:SetWidth(3)
+            r._accent = acc
+        end
+        r._accent:Show()
+        local k = "overall"
         r.btn:SetScript("OnClick", function()
             expandedSessions[k] = not expandedSessions[k]
             APT_RefreshHistory()
         end)
     end
 
+    local function AddSessionHeader(label, key, combined, sessObj)
+        local r = UseRow()
+        if not r then return end
+        if r._accent then r._accent:Hide() end
+        local expanded = expandedSessions[key]
+        r.arrow:SetText(expanded and "▼" or "▶")
+        r.arrow:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+        -- Show custom name + date when set, otherwise the default label
+        local displayLabel = (sessObj and sessObj.customName)
+            and (sessObj.customName .. "  —  " .. (sessObj.date or ""))
+            or label
+        r.lbl:SetText(displayLabel)
+        r.lbl:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+        if combined.totalCrafts > 0 then
+            r.base:SetText(tostring(combined.totalCrafts))
+            r.base:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+            r.total:SetText(tostring(combined.totalPotions))
+            r.total:SetTextColor(C_OR[1], C_OR[2], C_OR[3])
+            r.pct:SetText(CalcProcPct(combined))
+            r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
+        end
+        SetRowBg(r, 0.12, 0.09, 0.04, 0.70)
+        local k = key
+        local so = sessObj
+        r.btn:SetScript("OnClick", function(_, mouseBtn)
+            if mouseBtn == "RightButton" and so then
+                ShowRenameDialog(so)
+            else
+                expandedSessions[k] = not expandedSessions[k]
+                APT_RefreshHistory()
+            end
+        end)
+    end
+
     local function AddGroupHeader(groupName, s)
         local r = UseRow()
         if not r then return end
+        if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
         r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
         r.lbl:SetText(groupName)
-        r.lbl:SetTextColor(0.53, 0.67, 1.0)
+        r.lbl:SetTextColor(0.75, 0.75, 0.75)
         r.base:SetText(tostring(s.totalCrafts))
-        r.base:SetTextColor(0.55, 0.70, 1.0)
-        r.pct:SetText(CalcPctGain(s))
-        r.pct:SetTextColor(0.55, 0.70, 1.0)
-        SetRowBg(r, 0.10, 0.12, 0.26, 0.6)
+        r.base:SetTextColor(0.75, 0.75, 0.75)
+        r.total:SetText(tostring(s.totalPotions))
+        r.total:SetTextColor(0.75, 0.75, 0.75)
+        r.pct:SetText(CalcProcPct(s))
+        r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
+        SetRowBg(r, 0.10, 0.10, 0.10, 0.50)
     end
 
     local function AddItemRow(it)
         local r = UseRow()
         if not r then return end
+        if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
         r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
         r.lbl:SetText(it.name)
-        r.lbl:SetTextColor(0.80, 0.80, 0.80)
+        r.lbl:SetTextColor(0.65, 0.65, 0.65)
         r.base:SetText(tostring(it.totalCrafts))
+        r.base:SetTextColor(0.65, 0.65, 0.65)
         r.total:SetText(tostring(it.totalPotions))
-        r.pct:SetText(CalcPctGain(it))
+        r.total:SetTextColor(0.65, 0.65, 0.65)
+        r.pct:SetText(CalcProcPct(it))
+        r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
     end
 
     local function AddTotalRow(combined)
         local r = UseRow()
         if not r then return end
+        if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
         r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
-        r.lbl:SetText("|cffaaaaaa— Total —|r")
-        r.base:SetText(tostring(combined.totalCrafts))   r.base:SetTextColor(0.7, 0.7, 0.7)
-        r.total:SetText(tostring(combined.totalPotions)) r.total:SetTextColor(0.7, 0.7, 0.7)
-        r.pct:SetText(CalcPctGain(combined))             r.pct:SetTextColor(0.7, 0.7, 0.7)
-        SetRowBg(r, 0.08, 0.08, 0.15, 0.6)
+        r.lbl:SetText("Total")
+        r.lbl:SetTextColor(0.55, 0.55, 0.55)
+        r.base:SetText(tostring(combined.totalCrafts))
+        r.base:SetTextColor(0.55, 0.55, 0.55)
+        r.total:SetText(tostring(combined.totalPotions))
+        r.total:SetTextColor(0.55, 0.55, 0.55)
+        r.pct:SetText(CalcProcPct(combined))
+        r.pct:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
+        SetRowBg(r, 0.08, 0.07, 0.03, 0.50)
     end
 
     local function RenderGroupItems(s)
@@ -713,11 +1057,29 @@ APT_RefreshHistory = function()
         for _, it in ipairs(sorted) do AddItemRow(it) end
     end
 
+    -- ── Overall Stats banner (top) ────────────────────────────
+    local ovMap = {}
+    for _, g in ipairs(GROUPS_ORDER) do
+        ovMap[g] = APT.db.char.stats[g] and APT.db.char.stats[g].overall
+    end
+    local combinedOv = CombineGroups(ovMap)
+    AddOverallBanner(combinedOv)
+    if expandedSessions["overall"] then
+        for _, g in ipairs(GROUPS_ORDER) do
+            local ov = ovMap[g]
+            if ov and ov.totalCrafts > 0 then
+                AddGroupHeader(g, ov)
+            end
+        end
+        AddTotalRow(combinedOv)
+    end
+    curY = curY + 4
+
     -- ── Past sessions (newest first) ──────────────────────────
     for i, sess in ipairs(sessions) do
-        local key      = "sid_" .. (sess.id or i)   -- sess.id is stable across prepends; fallback for legacy entries
+        local key      = "sid_" .. (sess.id or i)
         local combined = CombineGroups(sess.stats or {})
-        AddSessionHeader(string.format("Session %d  —  %s", i, sess.date), key, combined)
+        AddSessionHeader(string.format("Session %d  —  %s", i, sess.date), key, combined, sess)
         if expandedSessions[key] then
             for _, g in ipairs(GROUPS_ORDER) do
                 local s = sess.stats and sess.stats[g]
@@ -731,24 +1093,8 @@ APT_RefreshHistory = function()
         end
     end
 
-    -- ── Overall (all-time) ────────────────────────────────────
-    local ovMap = {}
-    for _, g in ipairs(GROUPS_ORDER) do
-        ovMap[g] = APT.db.char.stats[g] and APT.db.char.stats[g].overall
-    end
-    local combinedOv = CombineGroups(ovMap)
-    AddSessionHeader("Overall", "overall", combinedOv)
-    if expandedSessions["overall"] then
-        for _, g in ipairs(GROUPS_ORDER) do
-            local ov = ovMap[g]
-            if ov and ov.totalCrafts > 0 then
-                AddGroupHeader(g, ov)
-            end
-        end
-        AddTotalRow(combinedOv)
-    end
-
     sc:SetHeight(math.max(curY + 8, 10))
+    if APT_HistoryFrame.UpdateScrollbar then APT_HistoryFrame.UpdateScrollbar() end
 end
 
 -- ============================================================
@@ -757,160 +1103,271 @@ end
 -- ============================================================
 
 local function CreateUI()
+    local W, H  = 380, 250
+    local ROW_H = 18
+    local PAD   = 12   -- left/right inner padding
+
     local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
-    f:SetSize(310, 178)
-    f:SetPoint("CENTER")
-    f:SetFrameStrata("MEDIUM")
+    -- Default: right edge sits just left of screen centre; restored from DB if moved before.
+    local wp = APT.db.char.windowPos
+    f:SetSize(wp and wp.w or W, wp and wp.h or H)
+    if wp then
+        f:SetPoint(wp.point, UIParent, wp.relPoint or wp.point, wp.x, wp.y)
+    else
+        f:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
+    end
+    f._defW, f._defH = W, H
+
+    f:SetFrameStrata("HIGH")
     f:SetMovable(true)
+    f:SetResizable(true)
+    f:SetToplevel(true)   -- auto-raise above sibling frames on click
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetScript("OnDragStop", function()
+        f:StopMovingOrSizing()
+        local point, _, relPoint, x, y = f:GetPoint()
+        APT.db.char.windowPos = { point=point, relPoint=relPoint, x=x, y=y,
+                                  w=f:GetWidth(), h=f:GetHeight() }
+    end)
     f:SetClampedToScreen(true)
     f:Hide()
     APT_Frame = f
 
+    -- Enforce minimum size live during drag
+    local _mClamp = false
+    f:SetScript("OnSizeChanged", function(self, w, h)
+        if _mClamp then return end
+        local nw = math.max(w, W)
+        local nh = math.max(h, H)
+        if nw ~= w or nh ~= h then
+            _mClamp = true
+            self:SetSize(nw, nh)
+            _mClamp = false
+        end
+    end)
+
+    -- Outer background  (bg-neutral-900)
     local bg = f:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints(f)
     bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    bg:SetVertexColor(0.08, 0.10, 0.20)
-    bg:SetAlpha(0.92)
+    bg:SetVertexColor(0.09, 0.09, 0.09)
+    bg:SetAlpha(0.97)
 
-    f:SetBackdrop({
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        edgeSize = 16,
-        insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
+    -- Orange border  (border-amber-700/60)
+    DrawBorders(f)
 
-    -- Layout constants.  Each value column shows "N  +X.X%" right-justified.
-    local X_LABEL = 12
-    local X_SESS  = 150
-    local W_SESS  = 80
-    local X_OVER  = 234
-    local W_OVER  = 68
-    local curY    = -14
+    -- Header strip  (bg-neutral-950/60, slightly darker)
+    local hdrBg = f:CreateTexture(nil, "BACKGROUND")
+    hdrBg:SetPoint("TOPLEFT",  f, "TOPLEFT",  1, -1)
+    hdrBg:SetPoint("TOPRIGHT", f, "TOPRIGHT", -1, -1)
+    hdrBg:SetHeight(28)
+    hdrBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    hdrBg:SetVertexColor(0.04, 0.04, 0.04)
 
-    -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-    title:SetWidth(290)
-    title:SetJustifyH("LEFT")
+    -- Close button inside header
+    MakeFrameCloseButton(f)
+
+    local curY = -7
+
+    -- Title  (text-amber-400 bold)
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
     title:SetText("Alchemy Proc Tracker")
-    title:SetTextColor(1, 0.85, 0)
-    curY = curY - 26
+    title:SetTextColor(1, 0.76, 0.18)
 
-    -- Column headers
-    local hSess = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
-    hSess:SetWidth(W_SESS)
-    hSess:SetJustifyH("RIGHT")
-    hSess:SetText("Session")
-    hSess:SetTextColor(1, 0.9, 0.1)
+    curY = curY - 28
 
-    local hOver = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hOver:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
-    hOver:SetWidth(W_OVER)
-    hOver:SetJustifyH("RIGHT")
-    hOver:SetText("Overall")
-    hOver:SetTextColor(1, 0.9, 0.1)
-    curY = curY - 20
-
-    -- One row per group: label | "N  +X.X%" session | "N  +X.X%" overall
-    local function AddGroupRow(g)
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-        lbl:SetWidth(130)
-        lbl:SetJustifyH("LEFT")
-        lbl:SetText(g)
-
-        local sess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        sess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
-        sess:SetWidth(W_SESS)
-        sess:SetJustifyH("RIGHT")
-        sess:SetText("—")
-
-        local over = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        over:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
-        over:SetWidth(W_OVER)
-        over:SetJustifyH("RIGHT")
-        over:SetText("—")
-
-        APT_Lines[g] = { sess = sess, over = over }
-        curY = curY - 18
-    end
-
-    for _, g in ipairs(GROUPS_ORDER) do
-        AddGroupRow(g)
-    end
-
-    -- Divider
-    local div = f:CreateTexture(nil, "ARTWORK")
-    div:SetPoint("TOPLEFT",  f, "TOPLEFT",  X_LABEL, curY - 4)
-    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8,      curY - 4)
-    div:SetHeight(1)
-    div:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    div:SetVertexColor(0.4, 0.4, 0.5, 0.6)
+    -- Divider below header  (border-amber-900/40)
+    MakeDivider(f, 1, curY, -1)
     curY = curY - 10
 
-    -- Total row
-    local totalLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    totalLbl:SetPoint("TOPLEFT", f, "TOPLEFT", X_LABEL, curY)
-    totalLbl:SetWidth(130)
-    totalLbl:SetJustifyH("LEFT")
-    totalLbl:SetText("Total")
-    totalLbl:SetTextColor(0.75, 0.75, 0.75)
+    -- Session label row
+    local sessLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sessLbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
+    sessLbl:SetText("Session:")
+    sessLbl:SetTextColor(0.60, 0.60, 0.60)   -- neutral-400
 
-    local totalSess = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    totalSess:SetPoint("TOPLEFT", f, "TOPLEFT", X_SESS, curY)
-    totalSess:SetWidth(W_SESS)
-    totalSess:SetJustifyH("RIGHT")
-    totalSess:SetText("—")
+    local sessVal = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sessVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY)
+    sessVal:SetJustifyH("RIGHT")
+    sessVal:SetText("Current Session")
+    sessVal:SetTextColor(1, 1, 1)
+    curY = curY - ROW_H
 
-    local totalOver = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    totalOver:SetPoint("TOPLEFT", f, "TOPLEFT", X_OVER, curY)
-    totalOver:SetWidth(W_OVER)
-    totalOver:SetJustifyH("RIGHT")
-    totalOver:SetText("—")
+    -- Sub-divider  (border-amber-900/20, very faint)
+    local subdiv = f:CreateTexture(nil, "ARTWORK")
+    subdiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  PAD, curY - 3)
+    subdiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY - 3)
+    subdiv:SetHeight(1)
+    subdiv:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    subdiv:SetVertexColor(0.40, 0.22, 0.03, 0.22)
+    curY = curY - 12
 
-    APT_Lines["total"] = { sess = totalSess, over = totalOver }
+    -- Proc-tier rows
+    local PROC_ROWS = {
+        { key = "BASE", label = "Base Craft:" },
+        { key = "X2",   label = "x2:"         },
+        { key = "X3",   label = "x3:"         },
+        { key = "X4",   label = "x4:"         },
+        { key = "X5",   label = "x5:"         },
+    }
 
-    local btn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    btn:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
+    for _, row in ipairs(PROC_ROWS) do
+        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
+        lbl:SetText(row.label)
+        lbl:SetTextColor(0.76, 0.76, 0.76)   -- neutral-300
+
+        local val = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        val:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY)
+        val:SetJustifyH("RIGHT")
+        val:SetText("0")
+        val:SetTextColor(1, 1, 1)
+
+        APT_Lines[row.key] = { val = val }
+        curY = curY - ROW_H
+    end
+
+    -- Divider above totals  (border-amber-900/40)
+    curY = curY - 4
+    MakeDivider(f, PAD, curY, -PAD)
+    curY = curY - 10
+
+    -- Total Crafts
+    local tcLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tcLbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
+    tcLbl:SetText("Total Crafts:")
+    tcLbl:SetTextColor(0.60, 0.60, 0.60)
+
+    local tcVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    tcVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY)
+    tcVal:SetJustifyH("RIGHT")
+    tcVal:SetText("0")
+    tcVal:SetTextColor(1, 1, 1)
+    APT_Lines["TOTAL_CRAFTS"] = { val = tcVal }
+    curY = curY - ROW_H
+
+    -- Total Items
+    local tiLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tiLbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
+    tiLbl:SetText("Total Items:")
+    tiLbl:SetTextColor(0.60, 0.60, 0.60)
+
+    local tiVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    tiVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY)
+    tiVal:SetJustifyH("RIGHT")
+    tiVal:SetText("0")
+    tiVal:SetTextColor(1, 1, 1)
+    APT_Lines["TOTAL_ITEMS"] = { val = tiVal }
+    curY = curY - ROW_H
+
+    -- % Gain  (text-emerald-400 on both label and value)
+    local pgLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pgLbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, curY)
+    pgLbl:SetText("% Gain:")
+    pgLbl:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
+
+    local pgVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    pgVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, curY)
+    pgVal:SetJustifyH("RIGHT")
+    pgVal:SetText("0.0%")
+    pgVal:SetTextColor(C_GRN[1], C_GRN[2], C_GRN[3])
+    APT_Lines["PCT_GAIN"] = { val = pgVal }
+
+    -- Resize grip (bottom-right corner); saves size + position when done
+    local grip = CreateFrame("Button", nil, f)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
+    grip:SetScript("OnMouseUp", function()
+        f:StopMovingOrSizing()
+        local point, _, relPoint, x, y = f:GetPoint()
+        APT.db.char.windowPos = { point=point, relPoint=relPoint, x=x, y=y,
+                                  w=f:GetWidth(), h=f:GetHeight() }
+    end)
+end
+
+-- ============================================================
+-- CombineAllStats
+-- Merges all groups into one stat table for a given scope.
+-- ============================================================
+
+local function CombineAllStats(scope)
+    local c = { totalCrafts=0, totalPotions=0, totalExtra=0,
+                procs1=0, procs2=0, procs3=0, procs4=0 }
+    for _, g in ipairs(GROUPS_ORDER) do
+        local s = APT.db.char.stats[g] and APT.db.char.stats[g][scope]
+        if s then
+            c.totalCrafts  = c.totalCrafts  + s.totalCrafts
+            c.totalPotions = c.totalPotions + s.totalPotions
+            c.totalExtra   = c.totalExtra   + s.totalExtra
+            c.procs1       = c.procs1       + s.procs1
+            c.procs2       = c.procs2       + s.procs2
+            c.procs3       = c.procs3       + s.procs3
+            c.procs4       = c.procs4       + s.procs4
+        end
+    end
+    return c
 end
 
 -- ============================================================
 -- APT_RefreshUI
--- Updates every FontString with current data from db.char.
+-- Populates the proc-tier breakdown table from session stats.
+--   Session  = craft count per tier this session
+--   Overall  = potions produced from that tier this session
+--   % Craft  = tier's share of total session craft attempts
+--   TOTAL %  = totalPotions / noProc_crafts * 100 (yield efficiency)
 -- ============================================================
 
 APT_RefreshUI = function()
     if not APT_Frame or not APT_Frame:IsShown() then return end
 
-    local stats   = APT.db.char.stats
-    local sessMap = {}
-    local overMap = {}
-    for _, g in ipairs(GROUPS_ORDER) do
-        local gs = stats[g]
-        if gs then
-            sessMap[g] = gs.session
-            overMap[g] = gs.overall
-        end
+    local sess   = CombineAllStats("session")
+    local tc     = sess.totalCrafts
+    local noProc = tc - sess.procs1 - sess.procs2 - sess.procs3 - sess.procs4
+
+    -- Per-tier craft counts
+    local tiers = {
+        { key = "BASE", count = noProc       },
+        { key = "X2",   count = sess.procs1  },
+        { key = "X3",   count = sess.procs2  },
+        { key = "X4",   count = sess.procs3  },
+        { key = "X5",   count = sess.procs4  },
+    }
+    for _, t in ipairs(tiers) do
+        local line = APT_Lines[t.key]
+        if line then line.val:SetText(tostring(t.count)) end
     end
 
-    -- Per-group rows
-    for _, g in ipairs(GROUPS_ORDER) do
-        local row = APT_Lines[g]
-        if row then
-            row.sess:SetText(FmtCell(sessMap[g]))
-            row.over:SetText(FmtCell(overMap[g]))
-        end
+    -- Total Crafts
+    if APT_Lines["TOTAL_CRAFTS"] then
+        APT_Lines["TOTAL_CRAFTS"].val:SetText(tostring(tc))
     end
 
-    -- Total row
-    local totalRow = APT_Lines["total"]
-    if totalRow then
-        totalRow.sess:SetText(FmtCell(CombineGroups(sessMap)))
-        totalRow.over:SetText(FmtCell(CombineGroups(overMap)))
+    -- Total Items  (sum of count × multiplier per tier)
+    local totalItems = noProc
+                     + sess.procs1 * 2
+                     + sess.procs2 * 3
+                     + sess.procs3 * 4
+                     + sess.procs4 * 5
+    if APT_Lines["TOTAL_ITEMS"] then
+        APT_Lines["TOTAL_ITEMS"].val:SetText(tostring(totalItems))
+    end
+
+    -- % Gain = (totalItems - noProc) / noProc * 100
+    -- matches React formula: ((overallTotal - baseCraft) / baseCraft) * 100
+    if APT_Lines["PCT_GAIN"] then
+        if noProc > 0 then
+            local pct = (totalItems - noProc) / noProc * 100
+            APT_Lines["PCT_GAIN"].val:SetText(string.format("%.1f%%", pct))
+        else
+            APT_Lines["PCT_GAIN"].val:SetText("0.0%")
+        end
     end
 end
 
@@ -1119,6 +1576,18 @@ local function ShowMinimapMenu(anchor)
         UIDropDownMenu_AddButton(info)
 
         info = UIDropDownMenu_CreateInfo()
+        info.text = "Session History"
+        info.notCheckable = true
+        info.func = function()
+            if APT_HistoryFrame then
+                APT_HistoryFrame:Show()
+                APT_RefreshHistory()
+            end
+            CloseDropDownMenus()
+        end
+        UIDropDownMenu_AddButton(info)
+
+        info = UIDropDownMenu_CreateInfo()
         info.text = "Reset"
         info.isTitle = true
         info.notCheckable = true
@@ -1213,6 +1682,23 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt reset|r                              — reset session stats (overall kept)")
         self:Print("  |cffffd700/apt reset all|r                          — reset ALL stats including overall")
         self:Print("  |cffffd700/apt history|r                            — open the session history browser")
+        self:Print("  |cffffd700/apt testdata|r                           — inject fake data for UI preview")
+        self:Print("  |cffffd700/apt resetpos|r                           — reset window positions to default")
+
+    elseif cmdLower == "resetpos" then
+        APT.db.char.windowPos  = false
+        APT.db.char.historyPos = false
+        if APT_Frame then
+            APT_Frame:SetSize(APT_Frame._defW or 380, APT_Frame._defH or 250)
+            APT_Frame:ClearAllPoints()
+            APT_Frame:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
+        end
+        if APT_HistoryFrame then
+            APT_HistoryFrame:SetSize(APT_HistoryFrame._defW or 500, APT_HistoryFrame._defH or 440)
+            APT_HistoryFrame:ClearAllPoints()
+            APT_HistoryFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
+        end
+        self:Print("Window positions reset.")
 
     elseif cmdLower == "show" then
         if APT_Frame then
@@ -1238,6 +1724,85 @@ function APT:HandleSlashCommand(input)
     elseif cmdLower == "debug" then
         debugMode = not debugMode
         self:Print("Debug mode: " .. (debugMode and "|cff00ff00ON|r — craft now to see event/message in chat." or "|cffff4444OFF|r"))
+
+    elseif cmdLower == "testdata" then
+        -- Inject fake data so the UI can be previewed without real crafting.
+        local fakeItems = {
+            FLASK    = { { name="Flask of Supreme Power",   totalCrafts=18, totalPotions=26, totalExtra=8  },
+                         { name="Flask of Distilled Wisdom",totalCrafts=12, totalPotions=16, totalExtra=4  } },
+            ELIXIR   = { { name="Elixir of the Mongoose",  totalCrafts=25, totalPotions=34, totalExtra=9  },
+                         { name="Greater Arcane Elixir",   totalCrafts=10, totalPotions=13, totalExtra=3  } },
+            POTION   = { { name="Major Healing Potion",    totalCrafts=30, totalPotions=42, totalExtra=12 },
+                         { name="Major Mana Potion",       totalCrafts=20, totalPotions=27, totalExtra=7  } },
+            TRANSMUTE= { { name="Arcanite Bar",            totalCrafts= 5, totalPotions= 7, totalExtra=2  } },
+        }
+        local function makeStats(mult)
+            local out = {}
+            for _, g in ipairs(GROUPS_ORDER) do
+                local items = {}
+                local tc, tp, te = 0, 0, 0
+                for _, it in ipairs(fakeItems[g] or {}) do
+                    local itc = math.floor(it.totalCrafts * mult)
+                    local itp = math.floor(it.totalPotions * mult)
+                    local ite = math.floor(it.totalExtra * mult)
+                    items[it.name] = { name=it.name, totalCrafts=itc, totalPotions=itp, totalExtra=ite }
+                    tc = tc + itc;  tp = tp + itp;  te = te + ite
+                end
+                out[g] = { totalCrafts=tc, totalPotions=tp, totalExtra=te, items=items }
+            end
+            return out
+        end
+
+        -- Current session stats (drives the main window)
+        local sessStats = makeStats(1)
+        for _, g in ipairs(GROUPS_ORDER) do
+            APT.db.char.stats[g] = APT.db.char.stats[g] or {}
+            local s = sessStats[g]
+            APT.db.char.stats[g].session = {
+                totalCrafts=s.totalCrafts, totalPotions=s.totalPotions, totalExtra=s.totalExtra,
+                procs1=math.floor(s.totalCrafts*0.20), procs2=math.floor(s.totalCrafts*0.08),
+                procs3=math.floor(s.totalCrafts*0.02), procs4=0,
+            }
+            local ov = makeStats(4)[g]
+            APT.db.char.stats[g].overall = {
+                totalCrafts=ov.totalCrafts, totalPotions=ov.totalPotions, totalExtra=ov.totalExtra,
+                procs1=math.floor(ov.totalCrafts*0.20), procs2=math.floor(ov.totalCrafts*0.08),
+                procs3=math.floor(ov.totalCrafts*0.02), procs4=0,
+            }
+        end
+
+        -- Three fake past sessions
+        APT.db.char.sessions = {}
+        local dates = { "2026-03-09", "2026-03-10", "2026-03-11" }
+        local names = { nil, "Flask Farm Run", nil }   -- session 2 has a custom name
+        for i = 1, 3 do
+            local s = makeStats(0.5 + i * 0.3)
+            table.insert(APT.db.char.sessions, {
+                id         = i,
+                date       = dates[i],
+                customName = names[i],
+                stats      = s,
+            })
+        end
+
+        -- Reset positions and sizes so windows open side by side
+        APT.db.char.windowPos  = false
+        APT.db.char.historyPos = false
+        if APT_Frame then
+            APT_Frame:SetSize(APT_Frame._defW or 380, APT_Frame._defH or 250)
+            APT_Frame:ClearAllPoints()
+            APT_Frame:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
+            APT_Frame:Show()
+        end
+        if APT_HistoryFrame then
+            APT_HistoryFrame:SetSize(APT_HistoryFrame._defW or 500, APT_HistoryFrame._defH or 440)
+            APT_HistoryFrame:ClearAllPoints()
+            APT_HistoryFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
+            APT_HistoryFrame:Show()
+        end
+        APT_RefreshUI()
+        APT_RefreshHistory()
+        self:Print("Test data injected. Windows repositioned side by side.")
 
     else
         self:Print("Unknown command. Type /apt for help.")
