@@ -52,7 +52,7 @@ local debugMode   = false
 -- A different item arriving mid-window finalizes the previous craft first.
 -- ============================================================
 
-local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
+local CRAFT_WINDOW    = 0.6   -- seconds to collect proc messages after first "You create"
 local SESSION_TIMEOUT = 900   -- 15 minutes: if alchemy window stays closed this long, new session starts next open
 local MAX_SESSIONS    = 200   -- maximum number of past sessions to keep in history
 
@@ -317,6 +317,23 @@ local function ParseCreateMessage(msg)
     link = msg:match("^You create: (.+)%.$")
     if link then return 1, link end
 
+    return nil, nil
+end
+
+-- ============================================================
+-- ParseLootMessage
+-- Parses "You receive loot: Nx[link]." or "You receive loot: [link]."
+-- These fire from CHAT_MSG_LOOT when alchemy mastery procs give extra items.
+-- ============================================================
+
+local function ParseLootMessage(msg)
+    if not msg then return nil, nil end
+    -- Multi: "You receive loot: 2x|Hitem:...|h[Name]|h|r."  (no space between x and link)
+    local n, link = msg:match("^You receive loot: (%d+)x(.+)%.$")
+    if n then return tonumber(n), link end
+    -- Single: "You receive loot: |Hitem:...|h[Name]|h|r."
+    link = msg:match("^You receive loot: (.+)%.$")
+    if link then return 1, link end
     return nil, nil
 end
 
@@ -1878,10 +1895,26 @@ function APT:OnSkillLinesChanged()
 end
 
 function APT:OnChatMessage(event, msg)
-    if debugMode and msg and msg:find("You create") then
-        self:Print(string.format("|cffaaaaaa[DEBUG] event=%s msg=%s|r", event, msg))
+    if debugMode then
+        self:Print(string.format("|cffaaaaaa[DEBUG] event=%s msg=%s|r", event, msg or "nil"))
     end
-    HandleCraftEvent(msg)
+
+    if event == "CHAT_MSG_LOOT" then
+        -- Proc extra items arrive as loot messages. Only care if a craft is in progress.
+        if currentCraft then
+            local amount, link = ParseLootMessage(msg)
+            if amount then
+                local itemID = ParseItemIDFromLink(link)
+                if itemID and itemID == currentCraft.itemID then
+                    currentCraft.totalCreated = currentCraft.totalCreated + amount
+                    ScheduleCraftFinalize()
+                end
+            end
+        end
+    else
+        -- CHAT_MSG_SKILL / CHAT_MSG_SYSTEM: "You create ..." messages
+        HandleCraftEvent(msg)
+    end
 end
 
 function APT:OnTradeSkillClose()
