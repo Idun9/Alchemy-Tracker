@@ -52,7 +52,7 @@ local debugMode   = false
 -- A different item arriving mid-window finalizes the previous craft first.
 -- ============================================================
 
-local CRAFT_WINDOW    = 0.6   -- seconds to collect proc messages after first "You create"
+local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
 local SESSION_TIMEOUT = 900   -- 15 minutes: if alchemy window stays closed this long, new session starts next open
 local MAX_SESSIONS    = 200   -- maximum number of past sessions to keep in history
 

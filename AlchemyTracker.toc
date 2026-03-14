@@ -19,4 +19,8 @@ lib\libdatabroker-1.1\LibDataBroker-1.1.lua
 lib\LibDBIcon-1.0\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
 AlchemyTrackerItems.lua
-AlchemyProcTracker.lua
+Core.lua
+UI_Shared.lua
+UI_Main.lua
+UI_History.lua
+Commands.lua
