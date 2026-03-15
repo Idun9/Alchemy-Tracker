@@ -21,8 +21,24 @@ local H_MAX_ROWS = 120
 -- ============================================================
 -- Expansion state
 -- Keys: "overall" or "sid_<id>" where id is the session's stable ID.
+-- Synced to db.char.expandedSessions for persistence across reloads.
 -- ============================================================
 local expandedSessions = {}
+
+local function SaveExpandedState()
+    if not APT.db or not APT.db.char then return end
+    local t = {}
+    for k, v in pairs(expandedSessions) do
+        if v then t[k] = true end
+    end
+    APT.db.char.expandedSessions = t
+end
+
+local function ToggleExpanded(key)
+    expandedSessions[key] = not expandedSessions[key]
+    SaveExpandedState()
+    APT.RefreshHistory()
+end
 
 -- ============================================================
 -- Session Rename Dialog  (lazily created)
@@ -115,6 +131,27 @@ end
 -- Rebuilds the row pool from the current sessions list.
 -- No-ops when the window is hidden.
 -- ============================================================
+-- Format seconds as "45m" or "1h 12m"
+local function FormatDuration(secs)
+    if not secs or secs < 60 then return nil end
+    local h = math.floor(secs / 3600)
+    local m = math.floor((secs % 3600) / 60)
+    if h > 0 then return string.format("%dh %dm", h, m) end
+    return string.format("%dm", m)
+end
+
+-- Returns groups in GROUPS_ORDER with the mastery-relevant group(s) first.
+local function MasteryOrderedGroups()
+    local spec = APT.db and APT.db.char.specialization.current or "None"
+    if spec == "Potion" then
+        return { "POTION", "FLASK", "ELIXIR", "TRANSMUTE" }
+    elseif spec == "Transmute" then
+        return { "TRANSMUTE", "FLASK", "ELIXIR", "POTION" }
+    end
+    -- Elixir Master or no mastery: default order (FLASK+ELIXIR already first)
+    return APT.GROUPS_ORDER
+end
+
 local function CalcProcPct(s)
     if not s or s.totalCrafts == 0 then return "—" end
     return string.format("%.1f%%", s.totalExtra / s.totalCrafts * 100)
@@ -208,10 +245,7 @@ APT.RefreshHistory = function()
             r._accent = acc
         end
         r._accent:Show()
-        r.btn:SetScript("OnClick", function()
-            expandedSessions["overall"] = not expandedSessions["overall"]
-            APT.RefreshHistory()
-        end)
+        r.btn:SetScript("OnClick", function() ToggleExpanded("overall") end)
     end
 
     -- ── Session header row ────────────────────────────────────
@@ -238,8 +272,7 @@ APT.RefreshHistory = function()
             if mouseBtn == "RightButton" and so then
                 ShowRenameDialog(so)
             else
-                expandedSessions[k] = not expandedSessions[k]
-                APT.RefreshHistory()
+                ToggleExpanded(k)
             end
         end)
     end
@@ -316,14 +349,18 @@ APT.RefreshHistory = function()
     curY = curY + 4
 
     -- ── Past sessions (newest first) ─────────────────────────
+    local groupOrder = MasteryOrderedGroups()
     for i, sess in ipairs(sessions) do
         local key      = SessionKey(sess, i)
         local combined = CombineGroups(sess.stats or {})
+        local dur      = sess.duration and FormatDuration(sess.duration)
+        local dateStr  = sess.date or ""
+        local dateLine = dur and (dateStr .. "  ·  " .. dur) or dateStr
         AddSessionHeader(
-            string.format("Session %d  —  %s", i, sess.date or ""),
+            string.format("Session %d  —  %s", i, dateLine),
             key, combined, sess)
         if expandedSessions[key] then
-            for _, g in ipairs(APT.GROUPS_ORDER) do
+            for _, g in ipairs(groupOrder) do
                 local s = sess.stats and sess.stats[g]
                 if s and s.totalCrafts > 0 then
                     AddGroupHeader(g, s)
@@ -372,6 +409,16 @@ function APT:CreateHistoryUI()
     f:SetClampedToScreen(true)
     f:Hide()
     APT.historyFrame = f
+
+    -- Restore persisted expansion state
+    for k, v in pairs(APT.db.char.expandedSessions or {}) do
+        expandedSessions[k] = v
+    end
+    -- Auto-expand overall on first ever open (nothing persisted)
+    if not next(expandedSessions) then
+        expandedSessions["overall"] = true
+        SaveExpandedState()
+    end
 
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function()

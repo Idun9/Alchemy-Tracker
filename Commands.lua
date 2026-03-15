@@ -3,6 +3,10 @@
 
 local APT = AlchemyTracker
 
+-- Two-step confirmation state for /apt reset all
+local _resetAllPending = false
+local _resetAllTimer   = nil
+
 -- ============================================================
 -- Helpers used by the options panel
 -- ============================================================
@@ -270,6 +274,7 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt reset all|r        — reset ALL stats including overall")
         self:Print("  |cffffd700/apt history|r          — open the session history browser")
         self:Print("  |cffffd700/apt testdata|r         — inject fake data for UI preview")
+        self:Print("  |cffffd700/apt export|r           — pre-fill chat box with session summary")
         self:Print("  |cffffd700/apt resetpos|r         — reset window positions to default")
         self:Print("  |cffffd700/apt debug|r            — toggle debug mode")
 
@@ -298,8 +303,20 @@ function APT:HandleSlashCommand(input)
         APT.ResetSessionStats()
 
     elseif cmdLower == "reset all" then
-        APT.ResetAllStats()
-        self:Print("Use |cffffd700/apt reset all|r intentionally — all session and overall stats were wiped.")
+        if _resetAllPending then
+            _resetAllPending = false
+            if _resetAllTimer then _resetAllTimer:Cancel(); _resetAllTimer = nil end
+            APT.ResetAllStats()
+        else
+            _resetAllPending = true
+            self:Print("|cffff4444WARNING:|r This will wipe ALL stats including overall.")
+            self:Print("Type |cffffd700/apt reset all|r again within 10 seconds to confirm.")
+            _resetAllTimer = C_Timer.NewTimer(10, function()
+                _resetAllPending = false
+                _resetAllTimer   = nil
+                APT:Print("Reset cancelled (timed out).")
+            end)
+        end
 
     elseif cmdLower == "history" then
         if APT.historyFrame then
@@ -398,6 +415,29 @@ function APT:HandleSlashCommand(input)
         APT.RefreshUI()
         APT.RefreshHistory()
         self:Print("Test data injected. Windows repositioned side by side.")
+
+    elseif cmdLower == "export" then
+        local sess = APT.CombineAllStats("session")
+        if sess.totalCrafts == 0 then
+            self:Print("No crafts this session to export.")
+        else
+            local spec    = APT.db.char.specialization.current
+            local specStr = spec ~= "None" and (spec .. " Master") or "No Mastery"
+            local procPct = sess.totalCrafts > 0
+                and (sess.totalExtra / sess.totalCrafts * 100) or 0
+            local msg = string.format(
+                "[AlchemyTracker] %s | %d crafts | %d items | x2:%d x3:%d x4:%d x5+:%d | %.1f%% proc rate",
+                specStr, sess.totalCrafts, sess.totalPotions,
+                sess.procs1, sess.procs2, sess.procs3, sess.procs4, procPct)
+            -- Pre-fill the chat input box so the player can post or copy
+            if ChatFrame1EditBox then
+                ChatFrame1EditBox:Show()
+                ChatFrame1EditBox:SetText(msg)
+                ChatFrame1EditBox:SetFocus()
+            else
+                self:Print(msg)
+            end
+        end
 
     else
         self:Print("Unknown command. Type /apt for help.")

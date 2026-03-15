@@ -25,6 +25,13 @@ APT.RefreshUI = function()
 
     local sess   = APT.CombineAllStats("session")
     local tc     = sess.totalCrafts
+
+    -- Empty state: show a single message instead of a column of zeros
+    if Lines["EMPTY"] then
+        Lines["EMPTY"]:SetShown(tc == 0)
+    end
+    local visible = tc > 0
+
     local noProc = tc - sess.procs1 - sess.procs2 - sess.procs3 - sess.procs4
 
     local tiers = {
@@ -35,24 +42,30 @@ APT.RefreshUI = function()
         { key = "X5",   count = sess.procs4 },
     }
     for _, t in ipairs(tiers) do
-        if Lines[t.key] then Lines[t.key]:SetText(tostring(t.count)) end
+        if Lines[t.key] then
+            Lines[t.key]:SetText(visible and tostring(t.count) or "")
+        end
     end
 
-    if Lines["TOTAL_CRAFTS"] then Lines["TOTAL_CRAFTS"]:SetText(tostring(tc)) end
+    if Lines["TOTAL_CRAFTS"] then
+        Lines["TOTAL_CRAFTS"]:SetText(visible and tostring(tc) or "")
+    end
 
     local totalItems = noProc
                      + sess.procs1 * 2
                      + sess.procs2 * 3
                      + sess.procs3 * 4
                      + sess.procs4 * 5
-    if Lines["TOTAL_ITEMS"] then Lines["TOTAL_ITEMS"]:SetText(tostring(totalItems)) end
+    if Lines["TOTAL_ITEMS"] then
+        Lines["TOTAL_ITEMS"]:SetText(visible and tostring(totalItems) or "")
+    end
 
     if Lines["PCT_GAIN"] then
-        if noProc > 0 then
+        if visible and noProc > 0 then
             local pct = (totalItems - noProc) / noProc * 100
             Lines["PCT_GAIN"]:SetText(string.format("%.1f%%", pct))
         else
-            Lines["PCT_GAIN"]:SetText("0.0%")
+            Lines["PCT_GAIN"]:SetText(visible and "0.0%" or "")
         end
     end
 end
@@ -166,6 +179,16 @@ function APT:CreateUI()
     subdiv:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     subdiv:SetVertexColor(0.40, 0.22, 0.03, 0.22)
     curY = curY - 12
+
+    -- Empty state label (hidden when there are crafts)
+    local emptyLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    emptyLbl:SetPoint("TOPLEFT",  f, "TOPLEFT",  M_PAD, curY)
+    emptyLbl:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
+    emptyLbl:SetJustifyH("CENTER")
+    emptyLbl:SetText("No crafts this session yet.")
+    emptyLbl:SetTextColor(0.45, 0.45, 0.45)
+    emptyLbl:Hide()
+    Lines["EMPTY"] = emptyLbl
 
     -- Proc-tier rows
     local PROC_ROWS = {

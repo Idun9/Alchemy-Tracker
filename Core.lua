@@ -24,9 +24,10 @@ local TRANSMUTE_MASTER_SPELL_ID = 28672
 -- ============================================================
 -- Craft Configuration
 -- ============================================================
-local CRAFT_WINDOW    = 0.4   -- seconds to collect proc messages after first "You create"
-local SESSION_TIMEOUT = 900   -- 15 min inactivity → new session on next open
-local MAX_SESSIONS    = 200
+local CRAFT_WINDOW        = 0.4   -- seconds to collect proc messages after first "You create"
+local SESSION_TIMEOUT     = 900   -- 15 min inactivity → new session on next open
+local MAX_SESSIONS        = 200
+local MAX_ITEMS_PER_GROUP = 150   -- max unique items tracked per group per session
 
 -- ============================================================
 -- Craft State Machine
@@ -56,15 +57,13 @@ APT.GROUPS_ORDER = GROUPS_ORDER
 
 local function newStatsDefaults()
     return {
-        totalCrafts         = 0,
-        totalPotions        = 0,
-        totalExtra          = 0,
-        procs1              = 0,
-        procs2              = 0,
-        procs3              = 0,
-        procs4              = 0,
-        currentNoProcStreak = 0,
-        longestNoProcStreak = 0,
+        totalCrafts  = 0,
+        totalPotions = 0,
+        totalExtra   = 0,
+        procs1       = 0,
+        procs2       = 0,
+        procs3       = 0,
+        procs4       = 0,
     }
 end
 
@@ -75,15 +74,14 @@ end
 -- Shallow-copy scalar stat fields; items = {} is always a fresh table.
 local function CopyStats(s)
     return {
-        totalCrafts         = s.totalCrafts,
-        totalPotions        = s.totalPotions,
-        totalExtra          = s.totalExtra,
-        procs1              = s.procs1,
-        procs2              = s.procs2,
-        procs3              = s.procs3,
-        procs4              = s.procs4,
-        longestNoProcStreak = s.longestNoProcStreak,
-        items               = {},
+        totalCrafts  = s.totalCrafts,
+        totalPotions = s.totalPotions,
+        totalExtra   = s.totalExtra,
+        procs1       = s.procs1,
+        procs2       = s.procs2,
+        procs3       = s.procs3,
+        procs4       = s.procs4,
+        items        = {},
     }
 end
 
@@ -107,10 +105,12 @@ local defaults = {
             POTION    = newGroupDefaults(),
             TRANSMUTE = newGroupDefaults(),
         },
-        nextSessionID = 0,
-        sessions      = {},
-        windowPos     = false,
-        historyPos    = false,
+        nextSessionID    = 0,
+        sessions         = {},
+        windowPos        = false,
+        historyPos       = false,
+        expandedSessions = {},    -- persisted expand state for the history browser
+        sessionStartTime = false, -- epoch time when the current session started
     },
 }
 
@@ -190,18 +190,10 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
         s.totalPotions = s.totalPotions + totalCreated
         s.totalExtra   = s.totalExtra   + extra
 
-        if extra >= 1 then
-            if     extra == 1 then s.procs1 = s.procs1 + 1
-            elseif extra == 2 then s.procs2 = s.procs2 + 1
-            elseif extra == 3 then s.procs3 = s.procs3 + 1
-            else                   s.procs4 = s.procs4 + 1
-            end
-            s.currentNoProcStreak = 0
-        else
-            s.currentNoProcStreak = s.currentNoProcStreak + 1
-            if s.currentNoProcStreak > s.longestNoProcStreak then
-                s.longestNoProcStreak = s.currentNoProcStreak
-            end
+        if     extra == 1 then s.procs1 = s.procs1 + 1
+        elseif extra == 2 then s.procs2 = s.procs2 + 1
+        elseif extra == 3 then s.procs3 = s.procs3 + 1
+        elseif extra >= 4 then s.procs4 = s.procs4 + 1
         end
     end
 
@@ -211,6 +203,16 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
         if not s.items then s.items = {} end
         local it = s.items[itemID]
         if not it then
+            -- Enforce cap: evict the entry with the fewest crafts to make room
+            local count = 0
+            for _ in pairs(s.items) do count = count + 1 end
+            if count >= MAX_ITEMS_PER_GROUP then
+                local minKey, minVal = nil, math.huge
+                for k, v in pairs(s.items) do
+                    if v.totalCrafts < minVal then minKey, minVal = k, v.totalCrafts end
+                end
+                if minKey then s.items[minKey] = nil end
+            end
             it = { name = itemName, totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
             s.items[itemID] = it
         end
@@ -218,6 +220,8 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
         it.totalPotions = it.totalPotions + totalCreated
         it.totalExtra   = it.totalExtra   + extra
     end
+
+    _sessionStatsCache = nil  -- invalidate combined-stats cache on every craft
 end
 
 -- ============================================================
@@ -381,10 +385,12 @@ local function SaveCurrentSession()
     if not hasActivity then return end
 
     APT.db.char.nextSessionID = (APT.db.char.nextSessionID or 0) + 1
+    local startTime = APT.db.char.sessionStartTime
     local snapshot = {
-        date  = date("%Y-%m-%d %H:%M"),
-        id    = APT.db.char.nextSessionID,
-        stats = {},
+        date     = date("%Y-%m-%d %H:%M"),
+        id       = APT.db.char.nextSessionID,
+        duration = startTime and math.max(0, time() - startTime) or nil,
+        stats    = {},
     }
     for _, group in ipairs(GROUPS_ORDER) do
         local s  = APT.db.char.stats[group].session
@@ -415,6 +421,8 @@ local function ResetSessionStats()
             APT.db.char.stats[group].session = newStatsDefaults()
         end
     end
+    _sessionStatsCache           = nil
+    APT.db.char.sessionStartTime = time()
     APT:Print("Session stats have been reset.")
     if APT.RefreshUI then APT.RefreshUI() end
 end
@@ -428,6 +436,8 @@ local function ResetAllStats()
             APT.db.char.stats[group].overall = newStatsDefaults()
         end
     end
+    _sessionStatsCache           = nil
+    APT.db.char.sessionStartTime = time()
     APT:Print("All stats (session and overall) have been reset.")
     if APT.RefreshUI then APT.RefreshUI() end
 end
@@ -435,8 +445,14 @@ APT.ResetAllStats = ResetAllStats
 
 -- ============================================================
 -- CombineAllStats  (aggregates all groups for the main window)
+-- Session scope is cached; invalidated by UpdateStats and resets.
 -- ============================================================
+local _sessionStatsCache = nil
+
 local function CombineAllStats(scope)
+    if scope == "session" and _sessionStatsCache then
+        return _sessionStatsCache
+    end
     local c = { totalCrafts=0, totalPotions=0, totalExtra=0,
                 procs1=0, procs2=0, procs3=0, procs4=0 }
     for _, g in ipairs(GROUPS_ORDER) do
@@ -451,6 +467,7 @@ local function CombineAllStats(scope)
             c.procs4       = c.procs4       + s.procs4
         end
     end
+    if scope == "session" then _sessionStatsCache = c end
     return c
 end
 APT.CombineAllStats = CombineAllStats
@@ -473,6 +490,11 @@ function APT:OnInitialize()
         end
     end
     self.db.char.nextSessionID = nextID
+
+    -- Initialise session timer if missing (e.g. first ever load)
+    if not self.db.char.sessionStartTime then
+        self.db.char.sessionStartTime = time()
+    end
 
     BuildTrackedItemLookup()
 
@@ -512,8 +534,10 @@ function APT:OnTradeSkillShow()
 
     if sessionClosed then
         sessionClosed = false
-        ResetSessionStats()
+        ResetSessionStats()   -- also resets sessionStartTime
         APT:Print("New session started (previous session expired).")
+    elseif not APT.db.char.sessionStartTime then
+        APT.db.char.sessionStartTime = time()
     end
 
     if DetectAlchemySpecialization() then
