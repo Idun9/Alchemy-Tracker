@@ -24,10 +24,17 @@ local TRANSMUTE_MASTER_SPELL_ID = 28672
 -- ============================================================
 -- Craft Configuration
 -- ============================================================
-local CRAFT_WINDOW        = 0.4   -- seconds to collect proc messages after first "You create"
-local SESSION_TIMEOUT     = 900   -- 15 min inactivity → new session on next open
-local MAX_SESSIONS        = 200
-local MAX_ITEMS_PER_GROUP = 150   -- max unique items tracked per group per session
+-- Default values — stored in db.char.settings so they can be overridden per character.
+local DEFAULT_CRAFT_WINDOW        = 0.4   -- seconds to collect proc messages after first "You create"
+local DEFAULT_SESSION_TIMEOUT     = 900   -- 15 min inactivity → new session on next open
+local DEFAULT_MAX_SESSIONS        = 200
+local DEFAULT_MAX_ITEMS_PER_GROUP = 150   -- max unique items tracked per group per session
+
+-- Runtime accessors — always read from db so overrides take effect immediately.
+local function CraftWindow()        return APT.db.char.settings.craftWindow      end
+local function SessionTimeout()     return APT.db.char.settings.sessionTimeout   end
+local function MaxSessions()        return APT.db.char.settings.maxSessions      end
+local function MaxItemsPerGroup()   return APT.db.char.settings.maxItemsPerGroup end
 
 -- ============================================================
 -- Craft State Machine
@@ -111,6 +118,12 @@ local defaults = {
         historyPos       = false,
         expandedSessions = {},    -- persisted expand state for the history browser
         sessionStartTime = false, -- epoch time when the current session started
+        settings = {
+            craftWindow      = DEFAULT_CRAFT_WINDOW,
+            sessionTimeout   = DEFAULT_SESSION_TIMEOUT,
+            maxSessions      = DEFAULT_MAX_SESSIONS,
+            maxItemsPerGroup = DEFAULT_MAX_ITEMS_PER_GROUP,
+        },
     },
 }
 
@@ -153,6 +166,11 @@ local function CalcPctGain(s)
     return "+0.0%"
 end
 APT.CalcPctGain = CalcPctGain   -- used by UI_History.lua
+
+-- Session-stats cache: invalidated by UpdateStats, ResetSessionStats, ResetAllStats.
+-- Declared here so all three functions share the same upvalue as CombineAllStats.
+local _sessionStatsCache = nil
+APT.InvalidateStatsCache = function() _sessionStatsCache = nil end
 
 -- ============================================================
 -- DetectAlchemySpecialization
@@ -206,7 +224,7 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
             -- Enforce cap: evict the entry with the fewest crafts to make room
             local count = 0
             for _ in pairs(s.items) do count = count + 1 end
-            if count >= MAX_ITEMS_PER_GROUP then
+            if count >= MaxItemsPerGroup() then
                 local minKey, minVal = nil, math.huge
                 for k, v in pairs(s.items) do
                     if v.totalCrafts < minVal then minKey, minVal = k, v.totalCrafts end
@@ -326,7 +344,7 @@ end
 
 local function ScheduleCraftFinalize()
     CancelCraftTimer()
-    craftTimer = C_Timer.NewTimer(CRAFT_WINDOW, function()
+    craftTimer = C_Timer.NewTimer(CraftWindow(), function()
         craftTimer = nil
         FinalizeCraft()
     end)
@@ -409,7 +427,7 @@ local function SaveCurrentSession()
     end
 
     table.insert(APT.db.char.sessions, 1, snapshot)
-    while #APT.db.char.sessions > MAX_SESSIONS do
+    while #APT.db.char.sessions > MaxSessions() do
         table.remove(APT.db.char.sessions)
     end
 end
@@ -447,8 +465,6 @@ APT.ResetAllStats = ResetAllStats
 -- CombineAllStats  (aggregates all groups for the main window)
 -- Session scope is cached; invalidated by UpdateStats and resets.
 -- ============================================================
-local _sessionStatsCache = nil
-
 local function CombineAllStats(scope)
     if scope == "session" and _sessionStatsCache then
         return _sessionStatsCache
@@ -508,7 +524,10 @@ function APT:OnInitialize()
 end
 
 function APT:OnEnable()
-    DetectAlchemySpecialization()
+    local detected = DetectAlchemySpecialization()
+    if not detected then
+        self:Print("|cffff8800No alchemy mastery detected.|r Tracking is disabled until a mastery specialization is found. Use |cffffd700/apt spec|r to check.")
+    end
 
     self:RegisterEvent("PLAYER_LOGIN",        "OnPlayerLogin")
     self:RegisterEvent("TRADE_SKILL_SHOW",    "OnTradeSkillShow")
@@ -588,7 +607,7 @@ function APT:OnTradeSkillClose()
 
     -- Start inactivity timer; fires sessionClosed if window stays closed 15 min
     if sessionTimer then sessionTimer:Cancel() end
-    sessionTimer = C_Timer.NewTimer(SESSION_TIMEOUT, function()
+    sessionTimer = C_Timer.NewTimer(SessionTimeout(), function()
         sessionTimer  = nil
         sessionClosed = true
     end)

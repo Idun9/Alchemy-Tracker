@@ -249,6 +249,48 @@ function APT:RegisterOptions()
                 set   = function(_, val) APT.debugMode = val end,
                 order = 42,
             },
+
+            -- ── Detection & Session ──────────────────────────────
+            timersHeader = { type = "header", name = "Detection & Session", order = 50 },
+            craftWindow = {
+                type  = "range",
+                name  = "Craft Window",
+                desc  = "Seconds to wait after 'You create' for proc loot messages before finalising the craft.",
+                min   = 0.1, max = 2.0, step = 0.1,
+                get   = function() return APT.db.char.settings.craftWindow end,
+                set   = function(_, val) APT.db.char.settings.craftWindow = val end,
+                order = 51,
+            },
+            sessionTimeout = {
+                type  = "range",
+                name  = "Session Timeout (minutes)",
+                desc  = "Minutes of trade-skill inactivity before the next craft opens a new session.",
+                min   = 5, max = 120, step = 5,
+                get   = function() return APT.db.char.settings.sessionTimeout / 60 end,
+                set   = function(_, val) APT.db.char.settings.sessionTimeout = val * 60 end,
+                order = 52,
+            },
+
+            -- ── Storage Caps ─────────────────────────────────────
+            storageHeader = { type = "header", name = "Storage Caps", order = 60 },
+            maxSessions = {
+                type  = "range",
+                name  = "Max Saved Sessions",
+                desc  = "Maximum number of past sessions kept in history. Oldest sessions are pruned when the limit is exceeded.",
+                min   = 10, max = 500, step = 10,
+                get   = function() return APT.db.char.settings.maxSessions end,
+                set   = function(_, val) APT.db.char.settings.maxSessions = val end,
+                order = 61,
+            },
+            maxItemsPerGroup = {
+                type  = "range",
+                name  = "Max Items per Group",
+                desc  = "Maximum unique items tracked per craft group per session. The item with fewest crafts is evicted when the cap is reached.",
+                min   = 10, max = 500, step = 10,
+                get   = function() return APT.db.char.settings.maxItemsPerGroup end,
+                set   = function(_, val) APT.db.char.settings.maxItemsPerGroup = val end,
+                order = 62,
+            },
         },
     }
 
@@ -276,7 +318,8 @@ function APT:HandleSlashCommand(input)
         self:Print("  |cffffd700/apt testdata|r         — inject fake data for UI preview")
         self:Print("  |cffffd700/apt export|r           — pre-fill chat box with session summary")
         self:Print("  |cffffd700/apt resetpos|r         — reset window positions to default")
-        self:Print("  |cffffd700/apt debug|r            — toggle debug mode")
+        self:Print("  |cffffd700/apt spec|r              — show detected alchemy specialization")
+        self:Print("  |cffffd700/apt debug|r             — toggle debug mode")
 
     elseif cmdLower == "resetpos" then
         APT.db.char.windowPos  = false
@@ -322,6 +365,15 @@ function APT:HandleSlashCommand(input)
         if APT.historyFrame then
             APT.historyFrame:Show()
             APT.RefreshHistory()
+        end
+
+    elseif cmdLower == "spec" then
+        local spec = APT.db.char.specialization
+        if spec.current == "None" then
+            self:Print("|cffff8800No alchemy mastery detected.|r Craft tracking is disabled.")
+            self:Print("Make sure you have Elixir, Potion, or Transmute Mastery and try |cffffd700/apt spec|r again after opening the trade skill window.")
+        else
+            self:Print(string.format("Detected specialization: |cff00ff00%s Mastery|r", spec.current))
         end
 
     elseif cmdLower == "debug" then
@@ -412,6 +464,7 @@ function APT:HandleSlashCommand(input)
             APT.historyFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
             APT.historyFrame:Show()
         end
+        APT.InvalidateStatsCache()
         APT.RefreshUI()
         APT.RefreshHistory()
         self:Print("Test data injected. Windows repositioned side by side.")
