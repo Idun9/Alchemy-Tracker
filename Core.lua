@@ -518,7 +518,7 @@ function APT:OnInitialize()
     if self.CreateUI         then self:CreateUI()         end
     if self.CreateHistoryUI  then self:CreateHistoryUI()  end
     if self.RegisterMinimapButton then self:RegisterMinimapButton() end
-    if self.RegisterOptions  then self:RegisterOptions()  end
+    if self.CreateSettingsUI then self:CreateSettingsUI() end
 
     self:RegisterChatCommand("apt", "HandleSlashCommand")
 end

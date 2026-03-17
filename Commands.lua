@@ -1,40 +1,11 @@
 -- Commands.lua
--- Slash command handler, minimap button, and AceConfig options panel.
+-- Slash command handler and minimap button.
 
 local APT = AlchemyTracker
 
 -- Two-step confirmation state for /apt reset all
 local _resetAllPending = false
 local _resetAllTimer   = nil
-
--- ============================================================
--- Helpers used by the options panel
--- ============================================================
-local function FormatGroupSummary(s, groupName)
-    if s.totalCrafts == 0 then
-        return string.format("|cffffd700%s:|r  No data", groupName)
-    end
-    return string.format("|cffffd700%s:|r  %d crafts  •  %s proc chance",
-        groupName, s.totalCrafts, APT.CalcPctGain(s))
-end
-
-local function BuildOverallDescription()
-    if not APT.db then return "" end
-    local lines = {}
-    for _, g in ipairs(APT.GROUPS_ORDER) do
-        local gs = APT.db.char.stats[g]
-        if gs then lines[#lines + 1] = FormatGroupSummary(gs.overall, g) end
-    end
-    return table.concat(lines, "\n")
-end
-
--- ============================================================
--- OpenOptions
--- ============================================================
-local function OpenOptions()
-    local AceConfigDialog = LibStub("AceConfigDialog-3.0", true)
-    if AceConfigDialog then AceConfigDialog:Open("AlchemyTracker") end
-end
 
 -- ============================================================
 -- Minimap Right-Click Dropdown
@@ -104,7 +75,7 @@ local function ShowMinimapMenu(anchor)
         info = UIDropDownMenu_CreateInfo()
         info.text = "Open Options"
         info.notCheckable = true
-        info.func = function() OpenOptions(); CloseDropDownMenus() end
+        info.func = function() APT.OpenSettings(); CloseDropDownMenus() end
         UIDropDownMenu_AddButton(info)
     end, "MENU")
 
@@ -145,157 +116,6 @@ function APT:RegisterMinimapButton()
     })
 
     LibDBIcon:Register("AlchemyTracker", ldb, APT.db.global.minimap)
-end
-
--- ============================================================
--- APT:RegisterOptions  (AceConfig-3.0 + AceConfigDialog-3.0)
--- ============================================================
-function APT:RegisterOptions()
-    local AceConfig       = LibStub("AceConfig-3.0", true)
-    local AceConfigDialog = LibStub("AceConfigDialog-3.0", true)
-    if not AceConfig or not AceConfigDialog then return end
-
-    local options = {
-        type = "group",
-        name = "Alchemy Tracker",
-        args = {
-            -- ── Window ──────────────────────────────────────────
-            windowHeader = { type="header", name="Window", order=1 },
-            toggleWindow = {
-                type  = "execute",
-                name  = function()
-                    return (APT.frame and APT.frame:IsShown())
-                        and "Hide Stats Window" or "Show Stats Window"
-                end,
-                func  = function()
-                    if APT.frame then
-                        if APT.frame:IsShown() then APT.frame:Hide()
-                        else APT.frame:Show(); APT.RefreshUI()
-                        end
-                    end
-                end,
-                order = 2,
-            },
-
-            -- ── Overall Stats ────────────────────────────────────
-            overallHeader = { type="header", name="Overall Stats", order=10 },
-            overallDesc = {
-                type     = "description",
-                name     = function() return BuildOverallDescription() end,
-                fontSize = "medium",
-                order    = 11,
-            },
-
-            -- ── Session History ──────────────────────────────────
-            sessionHeader = { type="header", name="Session History", order=20 },
-            browseHistory = {
-                type  = "execute",
-                name  = function()
-                    local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
-                    return string.format("Browse Session History  (%d saved)", n)
-                end,
-                desc  = "Open the session history browser  (/apt history)",
-                func  = function()
-                    if APT.historyFrame then
-                        APT.historyFrame:Show()
-                        APT.RefreshHistory()
-                    end
-                end,
-                order = 21,
-            },
-
-            -- ── Reset ────────────────────────────────────────────
-            resetHeader  = { type="header", name="Reset", order=30 },
-            resetSession = {
-                type  = "execute",
-                name  = "Reset Session Stats",
-                desc  = "Save current session to history and reset session stats  (/apt reset)",
-                func  = function() APT.ResetSessionStats() end,
-                order = 31,
-            },
-            resetAll = {
-                type        = "execute",
-                name        = "Reset All Stats",
-                desc        = "Reset ALL stats including overall — history is kept  (/apt reset all)",
-                confirm     = true,
-                confirmText = "Are you sure you want to reset ALL stats, including overall? Session history will be kept.",
-                func        = function() APT.ResetAllStats() end,
-                order       = 32,
-            },
-
-            -- ── Interface ────────────────────────────────────────
-            interfaceHeader = { type="header", name="Interface", order=40 },
-            minimapButton = {
-                type  = "toggle",
-                name  = "Show Minimap Button",
-                desc  = "Show or hide the minimap button",
-                get   = function() return not APT.db.global.minimap.hide end,
-                set   = function(_, val)
-                    APT.db.global.minimap.hide = not val
-                    local LibDBIcon = LibStub("LibDBIcon-1.0", true)
-                    if LibDBIcon then
-                        if val then LibDBIcon:Show("AlchemyTracker")
-                        else         LibDBIcon:Hide("AlchemyTracker")
-                        end
-                    end
-                end,
-                order = 41,
-            },
-            debugMode = {
-                type  = "toggle",
-                name  = "Debug Mode",
-                desc  = "Enable debug chat output for craft events  (/apt debug)",
-                get   = function() return APT.debugMode end,
-                set   = function(_, val) APT.debugMode = val end,
-                order = 42,
-            },
-
-            -- ── Detection & Session ──────────────────────────────
-            timersHeader = { type = "header", name = "Detection & Session", order = 50 },
-            craftWindow = {
-                type  = "range",
-                name  = "Craft Window",
-                desc  = "Seconds to wait after 'You create' for proc loot messages before finalising the craft.",
-                min   = 0.1, max = 2.0, step = 0.1,
-                get   = function() return APT.db.char.settings.craftWindow end,
-                set   = function(_, val) APT.db.char.settings.craftWindow = val end,
-                order = 51,
-            },
-            sessionTimeout = {
-                type  = "range",
-                name  = "Session Timeout (minutes)",
-                desc  = "Minutes of trade-skill inactivity before the next craft opens a new session.",
-                min   = 5, max = 120, step = 5,
-                get   = function() return APT.db.char.settings.sessionTimeout / 60 end,
-                set   = function(_, val) APT.db.char.settings.sessionTimeout = val * 60 end,
-                order = 52,
-            },
-
-            -- ── Storage Caps ─────────────────────────────────────
-            storageHeader = { type = "header", name = "Storage Caps", order = 60 },
-            maxSessions = {
-                type  = "range",
-                name  = "Max Saved Sessions",
-                desc  = "Maximum number of past sessions kept in history. Oldest sessions are pruned when the limit is exceeded.",
-                min   = 10, max = 500, step = 10,
-                get   = function() return APT.db.char.settings.maxSessions end,
-                set   = function(_, val) APT.db.char.settings.maxSessions = val end,
-                order = 61,
-            },
-            maxItemsPerGroup = {
-                type  = "range",
-                name  = "Max Items per Group",
-                desc  = "Maximum unique items tracked per craft group per session. The item with fewest crafts is evicted when the cap is reached.",
-                min   = 10, max = 500, step = 10,
-                get   = function() return APT.db.char.settings.maxItemsPerGroup end,
-                set   = function(_, val) APT.db.char.settings.maxItemsPerGroup = val end,
-                order = 62,
-            },
-        },
-    }
-
-    AceConfig:RegisterOptionsTable("AlchemyTracker", options)
-    AceConfigDialog:AddToBlizOptions("AlchemyTracker", "Alchemy Tracker")
 end
 
 -- ============================================================
