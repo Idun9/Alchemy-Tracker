@@ -7,10 +7,12 @@ local APT = AlchemyTracker
 -- ============================================================
 -- Layout constants
 -- ============================================================
-local M_DEF_W = 380
-local M_DEF_H = 250
-local M_ROW_H = 18
-local M_PAD   = 12
+local M_DEF_W = 300  -- default window width on first open
+local M_DEF_H = 235  -- default window height on first open
+local M_MIN_W = 200  -- minimum width enforced during resize
+local M_MIN_H = 235  -- minimum height enforced during resize
+local M_ROW_H = 18   -- height of each data row
+local M_PAD   = 12   -- left/right inner padding
 
 -- Line value widgets (populated by CreateUI, read by RefreshUI)
 local Lines = {}
@@ -26,10 +28,6 @@ APT.RefreshUI = function()
     local sess   = APT.CombineAllStats("session")
     local tc     = sess.totalCrafts
 
-    -- Empty state: show a single message instead of a column of zeros
-    if Lines["EMPTY"] then
-        Lines["EMPTY"]:SetShown(tc == 0)
-    end
     local visible = tc > 0
 
     local noProc = tc - sess.procs1 - sess.procs2 - sess.procs3 - sess.procs4
@@ -75,12 +73,12 @@ end
 -- Called once from OnInitialize; builds the frame and hides it.
 -- ============================================================
 function APT:CreateUI()
-    local DrawBorders        = APT.DrawBorders
+    local DrawBorders          = APT.DrawBorders
     local MakeFrameCloseButton = APT.MakeFrameCloseButton
-    local MakeDivider        = APT.MakeDivider
-    local MakeResizeGrip     = APT.MakeResizeGrip
-    local theme              = APT.theme
-    local OR, GRN            = theme.OR, theme.GRN
+    local MakeDivider          = APT.MakeDivider
+    local MakeResizeGrip       = APT.MakeResizeGrip
+    local theme                = APT.theme
+    local OR, GRN              = theme.OR, theme.GRN
 
     local f = CreateFrame("Frame", "AlchemyProcTrackerFrame", UIParent, "BackdropTemplate")
 
@@ -117,7 +115,7 @@ function APT:CreateUI()
     local _clamp = false
     f:SetScript("OnSizeChanged", function(self, w, h)
         if _clamp then return end
-        local nw, nh = math.max(w, M_DEF_W), math.max(h, M_DEF_H)
+        local nw, nh = math.max(w, M_MIN_W), math.max(h, M_MIN_H)
         if nw ~= w or nh ~= h then
             _clamp = true
             self:SetSize(nw, nh)
@@ -132,7 +130,7 @@ function APT:CreateUI()
     bg:SetVertexColor(0.09, 0.09, 0.09)
     bg:SetAlpha(0.97)
 
-    -- Orange border (child frames, not scissor-clipped)
+    -- Orange border
     DrawBorders(f)
 
     -- Darker header strip
@@ -158,7 +156,7 @@ function APT:CreateUI()
     MakeDivider(f, 1, curY, -1)
     curY = curY - 10
 
-    -- Session label row
+    -- Session label row (fixed; stays above scroll area)
     local sessLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     sessLbl:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
     sessLbl:SetText("Session:")
@@ -180,16 +178,6 @@ function APT:CreateUI()
     subdiv:SetVertexColor(0.40, 0.22, 0.03, 0.22)
     curY = curY - 12
 
-    -- Empty state label (hidden when there are crafts)
-    local emptyLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    emptyLbl:SetPoint("TOPLEFT",  f, "TOPLEFT",  M_PAD, curY)
-    emptyLbl:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
-    emptyLbl:SetJustifyH("CENTER")
-    emptyLbl:SetText("No crafts this session yet.")
-    emptyLbl:SetTextColor(0.45, 0.45, 0.45)
-    emptyLbl:Hide()
-    Lines["EMPTY"] = emptyLbl
-
     -- Proc-tier rows
     local PROC_ROWS = {
         { key = "BASE", label = "Base Craft:" },
@@ -207,7 +195,6 @@ function APT:CreateUI()
         local val = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         val:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
         val:SetJustifyH("RIGHT")
-        val:SetText("0")
         val:SetTextColor(1, 1, 1)
         Lines[row.key] = val
         curY = curY - M_ROW_H
@@ -227,7 +214,6 @@ function APT:CreateUI()
     local tcVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     tcVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
     tcVal:SetJustifyH("RIGHT")
-    tcVal:SetText("0")
     tcVal:SetTextColor(1, 1, 1)
     Lines["TOTAL_CRAFTS"] = tcVal
     curY = curY - M_ROW_H
@@ -241,7 +227,6 @@ function APT:CreateUI()
     local tiVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     tiVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
     tiVal:SetJustifyH("RIGHT")
-    tiVal:SetText("0")
     tiVal:SetTextColor(1, 1, 1)
     Lines["TOTAL_ITEMS"] = tiVal
     curY = curY - M_ROW_H
@@ -255,7 +240,6 @@ function APT:CreateUI()
     local pgVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     pgVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
     pgVal:SetJustifyH("RIGHT")
-    pgVal:SetText("0.0%")
     pgVal:SetTextColor(GRN[1], GRN[2], GRN[3])
     Lines["PCT_GAIN"] = pgVal
 

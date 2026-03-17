@@ -496,3 +496,7 @@ function APT:HandleSlashCommand(input)
         self:Print("Unknown command. Type /apt for help.")
     end
 end
+
+-- /rl shortcut for /reload
+SLASH_RL1 = "/rl"
+SlashCmdList["RL"] = function() ReloadUI() end
