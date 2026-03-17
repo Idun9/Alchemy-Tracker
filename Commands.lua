@@ -122,7 +122,7 @@ function APT:RegisterMinimapButton()
     local ldb = ldbLib:NewDataObject("AlchemyTracker", {
         type = "launcher",
         text = "Alchemy Tracker",
-        icon = "Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-300x300CroppedExtracted_uncompressed",
+        icon = "Interface\\AddOns\\AlchemyTracker\\icon\\alchemy-256x256",
         OnClick = function(self, button)
             if button == "RightButton" then
                 ShowMinimapMenu(self)
