@@ -236,19 +236,6 @@ function APT:CreateSettingsUI()
     toggleBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
     curY = curY - 28
 
-    -- ── Overall Stats ─────────────────────────────────────────────
-    SectionHeader("Overall Stats")
-
-    local statLines = {}
-    for _, g in ipairs(APT.GROUPS_ORDER) do
-        local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        fs:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-        fs:SetText(string.format("|cffffd700%s:|r  No data", g))
-        statLines[g] = fs
-        curY = curY - 16
-    end
-    curY = curY - 4
-
     -- ── Session History ───────────────────────────────────────────
     SectionHeader("Session History")
 
@@ -365,19 +352,6 @@ function APT:CreateSettingsUI()
             toggleBtn._label:SetText(
                 (APT.frame and APT.frame:IsShown())
                 and "Hide Stats Window" or "Show Stats Window")
-        end
-
-        -- Overall stats lines
-        for _, g in ipairs(APT.GROUPS_ORDER) do
-            local gs = APT.db and APT.db.char.stats and APT.db.char.stats[g]
-            local ov = gs and gs.overall
-            if ov and ov.totalCrafts and ov.totalCrafts > 0 then
-                statLines[g]:SetText(string.format(
-                    "|cffffd700%s:|r  %d crafts  •  %s proc chance",
-                    g, ov.totalCrafts, APT.CalcPctGain(ov)))
-            else
-                statLines[g]:SetText(string.format("|cffffd700%s:|r  No data", g))
-            end
         end
 
         -- Session history button label

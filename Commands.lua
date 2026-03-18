@@ -67,12 +67,6 @@ local function ShowMinimapMenu(anchor)
         UIDropDownMenu_AddButton(info)
 
         info = UIDropDownMenu_CreateInfo()
-        info.text = "Reset All Stats"
-        info.notCheckable = true
-        info.func = function() APT.ResetAllStats(); CloseDropDownMenus() end
-        UIDropDownMenu_AddButton(info)
-
-        info = UIDropDownMenu_CreateInfo()
         info.text = "Open Options"
         info.notCheckable = true
         info.func = function() APT.OpenSettings(); CloseDropDownMenus() end
