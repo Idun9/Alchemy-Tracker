@@ -102,6 +102,9 @@ function APT:CreateUI()
     f:Hide()
     APT.frame = f
 
+    -- Refresh stats whenever the window is shown
+    f:SetScript("OnShow", function() APT.RefreshUI() end)
+
     -- Persist position after drag
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function()
