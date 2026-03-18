@@ -196,12 +196,6 @@ function APT:HandleSlashCommand(input)
             self:Print(string.format("Detected specialization: |cff00ff00%s Mastery|r", spec.current))
         end
 
-    elseif cmdLower == "debug" then
-        APT.debugMode = not APT.debugMode
-        self:Print("Debug mode: " .. (APT.debugMode
-            and "|cff00ff00ON|r — craft now to see events in chat."
-            or  "|cffff4444OFF|r"))
-
     elseif cmdLower == "testdata" then
         -- Inject realistic TBC fake data so the UI can be previewed
         local fakeItems = {

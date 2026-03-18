@@ -8,9 +8,9 @@ local APT = AlchemyTracker
 -- Layout constants
 -- ============================================================
 local M_DEF_W = 300  -- default window width on first open
-local M_DEF_H = 235  -- default window height on first open
+local M_DEF_H = 217  -- default window height on first open
 local M_MIN_W = 200  -- minimum width enforced during resize
-local M_MIN_H = 235  -- minimum height enforced during resize
+local M_MIN_H = 217  -- minimum height enforced during resize
 local M_ROW_H = 18   -- height of each data row
 local M_PAD   = 12   -- left/right inner padding
 
@@ -49,19 +49,10 @@ APT.RefreshUI = function()
         Lines["TOTAL_CRAFTS"]:SetText(visible and tostring(tc) or "")
     end
 
-    local totalItems = noProc
-                     + sess.procs1 * 2
-                     + sess.procs2 * 3
-                     + sess.procs3 * 4
-                     + sess.procs4 * 5
-    if Lines["TOTAL_ITEMS"] then
-        Lines["TOTAL_ITEMS"]:SetText(visible and tostring(totalItems) or "")
-    end
-
     if Lines["PCT_GAIN"] then
-        if visible and noProc > 0 then
-            local pct = (totalItems - noProc) / noProc * 100
-            Lines["PCT_GAIN"]:SetText(string.format("%.1f%%", pct))
+        local totalItems = sess.totalPotions
+        if visible and totalItems > 0 then
+            Lines["PCT_GAIN"]:SetText(string.format("%.1f%%", sess.totalExtra / totalItems * 100))
         else
             Lines["PCT_GAIN"]:SetText(visible and "0.0%" or "")
         end
@@ -219,19 +210,6 @@ function APT:CreateUI()
     tcVal:SetJustifyH("RIGHT")
     tcVal:SetTextColor(1, 1, 1)
     Lines["TOTAL_CRAFTS"] = tcVal
-    curY = curY - M_ROW_H
-
-    -- Total Items
-    local tiLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    tiLbl:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
-    tiLbl:SetText("Total Items:")
-    tiLbl:SetTextColor(0.60, 0.60, 0.60)
-
-    local tiVal = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    tiVal:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY)
-    tiVal:SetJustifyH("RIGHT")
-    tiVal:SetTextColor(1, 1, 1)
-    Lines["TOTAL_ITEMS"] = tiVal
     curY = curY - M_ROW_H
 
     -- % Gain

@@ -140,18 +140,6 @@ local function FormatDuration(secs)
     return string.format("%dm", m)
 end
 
--- Returns groups in GROUPS_ORDER with the mastery-relevant group(s) first.
-local function MasteryOrderedGroups()
-    local spec = APT.db and APT.db.char.specialization.current or "None"
-    if spec == "Potion" then
-        return { "POTION", "FLASK", "ELIXIR", "TRANSMUTE" }
-    elseif spec == "Transmute" then
-        return { "TRANSMUTE", "FLASK", "ELIXIR", "POTION" }
-    end
-    -- Elixir Master or no mastery: default order (FLASK+ELIXIR already first)
-    return APT.GROUPS_ORDER
-end
-
 local function CalcProcPct(s)
     if not s or s.totalCrafts == 0 then return "—" end
     return string.format("%.1f%%", s.totalExtra / s.totalCrafts * 100)
@@ -277,22 +265,6 @@ APT.RefreshHistory = function()
         end)
     end
 
-    -- ── Group header row ──────────────────────────────────────
-    local function AddGroupHeader(groupName, s)
-        local r = UseRow()
-        if not r then return end
-        if r._accent then r._accent:Hide() end
-        r.lbl:ClearAllPoints()
-        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
-        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
-        r.lbl:SetText(groupName)
-        r.lbl:SetTextColor(0.75, 0.75, 0.75)
-        r.base:SetText(tostring(s.totalCrafts))   r.base:SetTextColor(0.75, 0.75, 0.75)
-        r.total:SetText(tostring(s.totalPotions)) r.total:SetTextColor(0.75, 0.75, 0.75)
-        r.pct:SetText(CalcProcPct(s))
-        SetRowBg(r, 0.10, 0.10, 0.10, 0.50)
-    end
-
     -- ── Item row ──────────────────────────────────────────────
     local function AddItemRow(it)
         local r = UseRow()
@@ -324,10 +296,15 @@ APT.RefreshHistory = function()
         SetRowBg(r, 0.08, 0.07, 0.03, 0.50)
     end
 
-    local function RenderGroupItems(s)
-        if not s.items then return end
+    -- Collects items from all groups in statsMap and renders them sorted by name.
+    local function RenderAllItems(statsMap)
         local sorted = {}
-        for _, it in pairs(s.items) do sorted[#sorted + 1] = it end
+        for _, g in ipairs(APT.GROUPS_ORDER) do
+            local s = statsMap and statsMap[g]
+            if s and s.items then
+                for _, it in pairs(s.items) do sorted[#sorted + 1] = it end
+            end
+        end
         table.sort(sorted, function(a, b) return a.name < b.name end)
         for _, it in ipairs(sorted) do AddItemRow(it) end
     end
@@ -340,16 +317,11 @@ APT.RefreshHistory = function()
     local combinedOv = CombineGroups(ovMap)
     AddOverallBanner(combinedOv)
     if expandedSessions["overall"] then
-        for _, g in ipairs(APT.GROUPS_ORDER) do
-            local ov = ovMap[g]
-            if ov and ov.totalCrafts > 0 then AddGroupHeader(g, ov) end
-        end
         AddTotalRow(combinedOv)
     end
     curY = curY + 4
 
     -- ── Past sessions (newest first) ─────────────────────────
-    local groupOrder = MasteryOrderedGroups()
     for i, sess in ipairs(sessions) do
         local key      = SessionKey(sess, i)
         local combined = CombineGroups(sess.stats or {})
@@ -360,13 +332,7 @@ APT.RefreshHistory = function()
             string.format("Session %d  —  %s", i, dateLine),
             key, combined, sess)
         if expandedSessions[key] then
-            for _, g in ipairs(groupOrder) do
-                local s = sess.stats and sess.stats[g]
-                if s and s.totalCrafts > 0 then
-                    AddGroupHeader(g, s)
-                    RenderGroupItems(s)
-                end
-            end
+            RenderAllItems(sess.stats)
             AddTotalRow(combined)
             curY = curY + 4
         end

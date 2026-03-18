@@ -42,14 +42,15 @@ local function MaxItemsPerGroup()   return APT.db.char.settings.maxItemsPerGroup
 -- ACCUMULATING: base craft received; waiting for proc loot within CRAFT_WINDOW.
 -- ============================================================
 local CRAFT_STATE = { IDLE = "IDLE", ACCUMULATING = "ACCUMULATING" }
-local craftState    = CRAFT_STATE.IDLE
-local currentCraft  = nil   -- { itemID, itemName, group, totalCreated }
-local craftTimer    = nil   -- C_Timer handle
-local sessionTimer  = nil   -- inactivity timer
-local sessionClosed = false -- true when timeout fired; resets on next TRADE_SKILL_SHOW
+local craftState      = CRAFT_STATE.IDLE
+local currentCraft    = nil   -- { itemID, itemName, group, totalCreated }
+local craftTimer      = nil   -- C_Timer handle
+local sessionTimer    = nil   -- inactivity timer
+local sessionClosed   = false -- true when timeout fired; resets on next TRADE_SKILL_SHOW
+local tradeSkillOpen  = false -- true only while the alchemy tradeskill window is open
 
--- Debug mode: exposed on APT so Commands.lua can toggle it.
-APT.debugMode = false
+-- Debug mode: set to true to log chat events. Cannot be toggled at runtime.
+local DEBUG = false
 
 -- ============================================================
 -- Shared Item Lookup  (flat; built at load time from AlchemyTrackerItems.lua)
@@ -307,6 +308,10 @@ end
 local PAT_CREATE_SINGLE = FmtToPattern(LOOT_ITEM_CREATED_SELF          or "You create: %s.")
 local PAT_CREATE_MULTI  = FmtToPattern(LOOT_ITEM_CREATED_SELF_MULTIPLE or "You create %dx %s.")
 
+-- Server-specific proc-result format: "You create: <link> x<n>" (no trailing period).
+-- Fires alongside the base craft message to indicate the total items produced (base + extras).
+local PAT_CREATE_PROC_RESULT = "^You create: (.+) x(%d+)%.?$"
+
 -- Loot message patterns (CHAT_MSG_LOOT) — proc extras
 local PAT_LOOT_SINGLE   = FmtToPattern(LOOT_ITEM_PUSHED_SELF          or "You receive loot: %s.")
 local PAT_LOOT_MULTI    = FmtToPattern(LOOT_ITEM_PUSHED_SELF_MULTIPLE or "You receive loot: %dx%s.")
@@ -323,6 +328,15 @@ local function ParseCreateMessage(msg)
     if n and link then return tonumber(n), link end
     link = msg:match(PAT_CREATE_SINGLE)
     if link then return 1, link end
+    return nil, nil
+end
+
+-- Parses the server-specific "You create: <link> x<n>" proc-result message.
+-- Returns total, link (total = total items produced including the base craft).
+local function ParseProcResultMessage(msg)
+    if not msg then return nil, nil end
+    local link, n = msg:match(PAT_CREATE_PROC_RESULT)
+    if link and n then return tonumber(n), link end
     return nil, nil
 end
 
@@ -353,7 +367,8 @@ end
 -- ============================================================
 -- HandleCraftEvent
 -- Called for every CHAT_MSG_SKILL message.
--- Groups same-item messages within CRAFT_WINDOW seconds.
+-- Each "You create:" message represents one discrete craft. Always finalize any
+-- pending craft first, then start a fresh accumulation window for proc loot/results.
 -- ============================================================
 local function HandleCraftEvent(msg)
     -- Mastery guard: only track if the player has an alchemy mastery specialization.
@@ -368,24 +383,17 @@ local function HandleCraftEvent(msg)
     local group, itemName = GetTrackedGroupForItem(itemID)
     if not group then return end
 
-    if craftState == CRAFT_STATE.ACCUMULATING
-    and currentCraft and currentCraft.itemID == itemID then
-        -- Same item within window: accumulate (proc extras from multi-create)
-        currentCraft.totalCreated = currentCraft.totalCreated + amount
-        ScheduleCraftFinalize()
-    else
-        -- New or different item: finalize previous craft first, then start new
-        CancelCraftTimer()
-        FinalizeCraft()
-        craftState   = CRAFT_STATE.ACCUMULATING
-        currentCraft = {
-            itemID       = itemID,
-            itemName     = itemName,
-            group        = group,
-            totalCreated = amount,
-        }
-        ScheduleCraftFinalize()
-    end
+    -- Finalize any previous craft unconditionally — each "You create:" is a new craft.
+    CancelCraftTimer()
+    FinalizeCraft()
+    craftState   = CRAFT_STATE.ACCUMULATING
+    currentCraft = {
+        itemID       = itemID,
+        itemName     = itemName,
+        group        = group,
+        totalCreated = amount,
+    }
+    ScheduleCraftFinalize()
 end
 
 -- ============================================================
@@ -447,17 +455,19 @@ end
 APT.ResetSessionStats = ResetSessionStats
 
 local function ResetAllStats()
-    SaveCurrentSession()
     for _, group in ipairs(GROUPS_ORDER) do
         if APT.db.char.stats[group] then
             APT.db.char.stats[group].session = newStatsDefaults()
             APT.db.char.stats[group].overall = newStatsDefaults()
         end
     end
+    APT.db.char.sessions      = {}
+    APT.db.char.nextSessionID = 0
     _sessionStatsCache           = nil
     APT.db.char.sessionStartTime = time()
     APT:Print("All stats (session and overall) have been reset.")
-    if APT.RefreshUI then APT.RefreshUI() end
+    if APT.RefreshUI    then APT.RefreshUI() end
+    if APT.RefreshHistory then APT.RefreshHistory() end
 end
 APT.ResetAllStats = ResetAllStats
 
@@ -549,6 +559,7 @@ function APT:OnPlayerLogin()
 end
 
 function APT:OnTradeSkillShow()
+    tradeSkillOpen = true
     if sessionTimer then sessionTimer:Cancel(); sessionTimer = nil end
 
     if sessionClosed then
@@ -571,7 +582,7 @@ function APT:OnSkillLinesChanged()
 end
 
 function APT:OnChatMessage(event, msg)
-    if APT.debugMode then
+    if DEBUG then
         -- Strip hyperlinks and colour codes for readable debug output
         local clean = msg and msg
             :gsub("|H[^|]*|h(.-)|h", "%1")
@@ -582,9 +593,36 @@ function APT:OnChatMessage(event, msg)
     end
 
     if event == "CHAT_MSG_LOOT" then
-        -- Mastery guard: only accumulate proc loot if a mastery is active
+        -- Check proc-result format FIRST: "You create: <link> x<n>"
+        -- This must come before ParseCreateMessage because a greedy PAT_CREATE_SINGLE
+        -- (no trailing period on some servers) would otherwise swallow the xN suffix.
+        local procTotal, procLink = ParseProcResultMessage(msg)
+        if procTotal and procLink then
+            if tradeSkillOpen
+            and craftState == CRAFT_STATE.ACCUMULATING
+            and currentCraft then
+                local itemID = ParseItemIDFromLink(procLink)
+                if itemID and itemID == currentCraft.itemID then
+                    local extra = procTotal - currentCraft.totalCreated
+                    if extra > 0 then
+                        currentCraft.totalCreated = currentCraft.totalCreated + extra
+                        ScheduleCraftFinalize()
+                    end
+                end
+            end
+            return
+        end
+
+        -- Some servers/versions send "You create:" messages as CHAT_MSG_LOOT instead
+        -- of CHAT_MSG_SKILL — detect and handle them as craft events.
+        if ParseCreateMessage(msg) then
+            HandleCraftEvent(msg)
+            return
+        end
+
+        -- Standard proc loot: "You receive loot: <link>"
         if APT.db.char.specialization.current == "None" then return end
-        -- Only matters if a craft is currently accumulating
+        if not tradeSkillOpen then return end
         if craftState ~= CRAFT_STATE.ACCUMULATING or not currentCraft then return end
 
         local amount, link = ParseLootMessage(msg)
@@ -601,6 +639,7 @@ function APT:OnChatMessage(event, msg)
 end
 
 function APT:OnTradeSkillClose()
+    tradeSkillOpen = false
     -- Finalize any pending craft immediately
     CancelCraftTimer()
     FinalizeCraft()

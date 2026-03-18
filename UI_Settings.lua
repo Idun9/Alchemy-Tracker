@@ -267,31 +267,31 @@ function APT:CreateSettingsUI()
 
     local btnW = math.floor((S_W - S_PAD * 2 - 8) / 2)
 
-    local resetSessBtn = MakeBtn(f, "Reset Session Stats", btnW, 20, function()
-        APT.ResetSessionStats()
-    end)
-    resetSessBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
+    local function MakeConfirmBtn(label, xPos, action)
+        local pending, timer = false, nil
+        local btn = MakeBtn(f, label, btnW, 20, nil)
+        btn:SetPoint("TOPLEFT", f, "TOPLEFT", xPos, curY)
+        btn:SetScript("OnClick", function()
+            if pending then
+                pending = false
+                if timer then timer:Cancel(); timer = nil end
+                if btn._label then btn._label:SetText(label) end
+                action()
+            else
+                pending = true
+                if btn._label then btn._label:SetText("Are you sure?") end
+                timer = C_Timer.NewTimer(2, function()
+                    pending = false
+                    timer   = nil
+                    if btn._label then btn._label:SetText(label) end
+                end)
+            end
+        end)
+        return btn
+    end
 
-    local resetAllBtn
-    local _rstPending, _rstTimer = false, nil
-    resetAllBtn = MakeBtn(f, "Reset All Stats", btnW, 20, nil)
-    resetAllBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD + btnW + 8, curY)
-    resetAllBtn:SetScript("OnClick", function()
-        if _rstPending then
-            _rstPending = false
-            if _rstTimer then _rstTimer:Cancel(); _rstTimer = nil end
-            if resetAllBtn._label then resetAllBtn._label:SetText("Reset All Stats") end
-            APT.ResetAllStats()
-        else
-            _rstPending = true
-            if resetAllBtn._label then resetAllBtn._label:SetText("Confirm? (click again)") end
-            _rstTimer = C_Timer.NewTimer(5, function()
-                _rstPending = false
-                _rstTimer   = nil
-                if resetAllBtn._label then resetAllBtn._label:SetText("Reset All Stats") end
-            end)
-        end
-    end)
+    MakeConfirmBtn("Reset Session Stats", S_PAD,            APT.ResetSessionStats)
+    MakeConfirmBtn("Reset All Stats",     S_PAD + btnW + 8, APT.ResetAllStats)
     curY = curY - 28
 
     -- ── Interface ─────────────────────────────────────────────────
