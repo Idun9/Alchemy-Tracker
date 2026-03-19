@@ -6,7 +6,7 @@ local APT = AlchemyTracker
 -- ============================================================
 -- APT.InjectTestData
 -- Populates fake sessions and stats for UI preview.
--- Called by /apt testdata and the Settings "Load Test Data" button.
+-- Called by the Settings "Load Test Data" button.
 -- ============================================================
 function APT.InjectTestData()
     if not APT.db or not APT.db.char then return end
@@ -194,16 +194,24 @@ function APT:HandleSlashCommand(input)
     if cmdLower == "" then
         local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
         local ver   = (_meta and _meta(APT.ADDON_NAME, "Version")) or "?"
-        self:Print(string.format("Alchemy Tracker v%s — type |cffffd700/apt commands|r for a list of commands.", ver))
+        self:Print(string.format("Alchemy Tracker v%s — type |cffffd700/at commands|r for a list of commands.", ver))
 
     elseif cmdLower == "commands" then
-        self:Print("|cffffd700/apt show|r        — open the stats window")
-        self:Print("|cffffd700/apt hide|r        — close the stats window")
-        self:Print("|cffffd700/apt history|r     — open session history")
-        self:Print("|cffffd700/apt reset|r       — reset session stats")
-        self:Print("|cffffd700/apt reset all|r   — reset all stats including overall")
-        self:Print("|cffffd700/apt resetpos|r    — reset window positions")
-        self:Print("|cffffd700/apt debug|r       — toggle debug mode")
+        self:Print("|cffffd700/at show|r        — open the stats window")
+        self:Print("|cffffd700/at hide|r        — close the stats window")
+        self:Print("|cffffd700/at history|r     — open session history")
+        self:Print("|cffffd700/at options|r     — open settings")
+        self:Print("|cffffd700/at reset|r       — reset session stats")
+        self:Print("|cffffd700/at reset all|r   — reset all stats including overall")
+        self:Print("|cffffd700/at resetpos|r    — reset window positions")
+        self:Print("|cffffd700/at debug|r       — toggle debug mode")
+
+    elseif cmdLower == "options" then
+        APT.OpenSettings()
+
+    elseif cmdLower == "debug" then
+        APT.debugMode = not APT.debugMode
+        self:Print("Debug mode: " .. (APT.debugMode and "|cff00ff00ON|r" or "|cffff4444OFF|r"))
 
     elseif cmdLower == "resetpos" then
         APT.db.char.windowPos  = false
@@ -239,7 +247,7 @@ function APT:HandleSlashCommand(input)
         end
 
     else
-        self:Print("Unknown command. Type /apt for help.")
+        self:Print("Unknown command. Type |cffffd700/at|r for help.")
     end
 end
 

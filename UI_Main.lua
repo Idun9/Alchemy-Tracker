@@ -140,7 +140,7 @@ function APT:CreateUI()
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
-    title:SetText("Alchemy Proc Tracker")
+    title:SetText("Alchemy Tracker")
     title:SetTextColor(1, 0.76, 0.18)
     curY = curY - 28
 

@@ -529,7 +529,7 @@ function APT:OnInitialize()
     if self.RegisterMinimapButton then self:RegisterMinimapButton() end
     if self.CreateSettingsUI then self:CreateSettingsUI() end
 
-    self:RegisterChatCommand("apt", "HandleSlashCommand")
+    self:RegisterChatCommand("at", "HandleSlashCommand")
 end
 
 function APT:OnEnable()
