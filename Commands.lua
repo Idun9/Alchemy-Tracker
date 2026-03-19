@@ -198,18 +198,7 @@ function APT:HandleSlashCommand(input)
     if cmdLower == "" or cmdLower == "help" then
         local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
         local ver   = (_meta and _meta(APT.ADDON_NAME, "Version")) or "?"
-        self:Print(string.format("v%s — TBC Classic alchemy mastery proc tracker", ver))
-        self:Print("  |cffffd700/apt|r                 — show this help")
-        self:Print("  |cffffd700/apt show|r             — open the stats window")
-        self:Print("  |cffffd700/apt hide|r             — close the stats window")
-        self:Print("  |cffffd700/apt reset|r            — reset session stats (overall kept)")
-        self:Print("  |cffffd700/apt reset all|r        — reset ALL stats including overall")
-        self:Print("  |cffffd700/apt history|r          — open the session history browser")
-        self:Print("  |cffffd700/apt testdata|r         — inject fake data for UI preview")
-        self:Print("  |cffffd700/apt export|r           — pre-fill chat box with session summary")
-        self:Print("  |cffffd700/apt resetpos|r         — reset window positions to default")
-        self:Print("  |cffffd700/apt spec|r              — show detected alchemy specialization")
-        self:Print("  |cffffd700/apt debug|r             — toggle debug mode")
+        self:Print(string.format("v%s  |cffffd700/apt|r show · hide · history · reset · reset all · spec · export · resetpos · debug · testdata", ver))
 
     elseif cmdLower == "resetpos" then
         APT.db.char.windowPos  = false
@@ -242,8 +231,7 @@ function APT:HandleSlashCommand(input)
             APT.ResetAllStats()
         else
             _resetAllPending = true
-            self:Print("|cffff4444WARNING:|r This will wipe ALL stats including overall.")
-            self:Print("Type |cffffd700/apt reset all|r again within 10 seconds to confirm.")
+            self:Print("|cffff4444WARNING:|r Wipes ALL stats. Type |cffffd700/apt reset all|r again within 10 sec to confirm.")
             _resetAllTimer = C_Timer.NewTimer(10, function()
                 _resetAllPending = false
                 _resetAllTimer   = nil
@@ -260,8 +248,7 @@ function APT:HandleSlashCommand(input)
     elseif cmdLower == "spec" then
         local spec = APT.db.char.specialization
         if spec.current == "None" then
-            self:Print("|cffff8800No alchemy mastery detected.|r Craft tracking is disabled.")
-            self:Print("Make sure you have Elixir, Potion, or Transmute Mastery and try |cffffd700/apt spec|r again after opening the trade skill window.")
+            self:Print("|cffff8800No mastery detected.|r Open the tradeskill window then type |cffffd700/apt spec|r to retry.")
         else
             self:Print(string.format("Detected specialization: |cff00ff00%s Mastery|r", spec.current))
         end
