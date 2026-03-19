@@ -7,7 +7,7 @@ local APT = AlchemyTracker
 -- ============================================================
 -- Layout constants
 -- ============================================================
-local H_DEF_W    = 500
+local H_DEF_W    = 620
 local H_DEF_H    = 440
 local H_ROW      = 20
 local H_ARROW    = 8
@@ -18,7 +18,7 @@ local H_MAX_ROWS = 120
 local HEADER_BOT = 50    -- y from top where panels begin (below title/divider)
 local FP_HDR_H   = 26    -- filter panel header height (collapsed)
 local FP_CNT_H   = 60    -- filter panel content height (when expanded)
-local SP_H       = 26    -- overall stats panel height
+local SP_H       = 22    -- overall stats panel height
 local SB_W       = 6     -- scrollbar width
 
 -- ============================================================
@@ -353,9 +353,9 @@ APT.RefreshHistory = function()
         sp.labelBase:SetText("Base: "  .. tostring(combined.totalCrafts))
         sp.labelTotal:SetText("Total: " .. tostring(combined.totalPotions))
         sp.labelProc:SetText("Proc: "  .. CalcProcPct(combined))
-        local bestName, bestPct = GetBestItem(sessions, HasFilter() and selectedItems or nil)
-        if bestName then
-            sp.labelBest:SetText(string.format("Best: %s  (%.1f%%)", bestName, bestPct))
+        if APT.db.char.settings.showBestFlask then
+            local bestName, bestPct = GetBestItem(sessions, HasFilter() and selectedItems or nil)
+            sp.labelBest:SetText(bestName and string.format("Best: %s  (%.1f%%)", bestName, bestPct) or "")
         else
             sp.labelBest:SetText("")
         end
@@ -385,7 +385,7 @@ APT.RefreshHistory = function()
         r.arrow:SetTextColor(OR[1], OR[2], OR[3])
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL, 0)
-        r.lbl:SetPoint("RIGHT", r.base, "LEFT", -8, 0)
+        r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
         r.lbl:SetText("")
         r.lbl:SetTextColor(1, 1, 1)
         r.base:SetText("")   r.base:SetTextColor(1, 1, 1)
@@ -439,7 +439,7 @@ APT.RefreshHistory = function()
         if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
-        r.lbl:SetPoint("RIGHT", r.base, "LEFT", -8, 0)
+        r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
         r.lbl:SetText("Item")
         r.lbl:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
         r.base:SetText("Base")   r.base:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
@@ -457,7 +457,7 @@ APT.RefreshHistory = function()
         local sel = selectedItems[it.name]
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
-        r.lbl:SetPoint("RIGHT", r.base, "LEFT", -8, 0)
+        r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
         r.lbl:SetText(it.name)
         if sel then
             r.lbl:SetTextColor(OR[1], OR[2], OR[3])
@@ -484,7 +484,7 @@ APT.RefreshHistory = function()
         if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
-        r.lbl:SetPoint("RIGHT", r.base, "LEFT", -8, 0)
+        r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
         r.lbl:SetText("Total")
         r.lbl:SetTextColor(0.55, 0.55, 0.55)
         r.base:SetText(tostring(combined.totalCrafts))   r.base:SetTextColor(0.55, 0.55, 0.55)
@@ -790,37 +790,52 @@ function APT:CreateHistoryUI()
     spAccent:SetPoint("BOTTOMLEFT", sp, "BOTTOMLEFT", 0, 0)
     spAccent:SetWidth(3)
 
-    local spTitle = sp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    -- All labels use the same font so they share a single baseline.
+    local spTitle = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    spTitle:SetFont("Fonts\\FRIZQT__.TTF", 13)
     spTitle:SetPoint("LEFT", sp, "LEFT", 10, 0)
     spTitle:SetTextColor(OR[1], OR[2], OR[3])
     spTitle:SetText("Overall Stats")
+    spTitle:SetWordWrap(false)
     sp.labelTitle = spTitle
 
     local spBest = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    spBest:SetPoint("LEFT", spTitle, "RIGHT", 14, 0)
-    spBest:SetPoint("RIGHT", sp, "RIGHT", -140, 0)
+    spBest:SetFont("Fonts\\FRIZQT__.TTF", 13)
+    spBest:SetPoint("LEFT", spTitle, "RIGHT", 3, 0)
+    spBest:SetPoint("RIGHT", sp, "RIGHT", -269, 0)   -- 190+76+3
     spBest:SetJustifyH("LEFT")
+    spBest:SetWordWrap(false)
     spBest:SetTextColor(OR[1] * 0.85, OR[2] * 0.85, OR[3] * 0.85)
     spBest:SetText("")
     sp.labelBest = spBest
 
+    -- Widths sized to always fit prefixed values ("Proc: 37.3%", "Total: 648", "Base: 472")
     local spProc = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    spProc:SetFont("Fonts\\FRIZQT__.TTF", 13)
     spProc:SetPoint("RIGHT", sp, "RIGHT", -8, 0)
+    spProc:SetWidth(86)
     spProc:SetJustifyH("RIGHT")
+    spProc:SetWordWrap(false)
     spProc:SetTextColor(GRN[1], GRN[2], GRN[3])
     spProc:SetText("Proc: —")
     sp.labelProc = spProc
 
     local spTotal = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    spTotal:SetPoint("RIGHT", spProc, "LEFT", -10, 0)
+    spTotal:SetFont("Fonts\\FRIZQT__.TTF", 13)
+    spTotal:SetPoint("RIGHT", sp, "RIGHT", -102, 0)   -- 8+86+8
+    spTotal:SetWidth(80)
     spTotal:SetJustifyH("RIGHT")
+    spTotal:SetWordWrap(false)
     spTotal:SetTextColor(0.72, 0.72, 0.72)
     spTotal:SetText("Total: —")
     sp.labelTotal = spTotal
 
     local spBase = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    spBase:SetPoint("RIGHT", spTotal, "LEFT", -10, 0)
+    spBase:SetFont("Fonts\\FRIZQT__.TTF", 13)
+    spBase:SetPoint("RIGHT", sp, "RIGHT", -190, 0)   -- 102+80+8
+    spBase:SetWidth(76)
     spBase:SetJustifyH("RIGHT")
+    spBase:SetWordWrap(false)
     spBase:SetTextColor(0.72, 0.72, 0.72)
     spBase:SetText("Base: —")
     sp.labelBase = spBase
@@ -837,6 +852,11 @@ function APT:CreateHistoryUI()
     sc:SetWidth(H_DEF_W - 8 - (SB_W + 10))   -- safe initial width; OnShow corrects after layout
     sc:SetHeight(10)
     sf:SetScrollChild(sc)
+
+    sf:SetScript("OnSizeChanged", function(self)
+        local w = self:GetWidth()
+        if w and w > 0 then sc:SetWidth(w) end
+    end)
 
     f:SetScript("OnShow", function()
         local w = sf:GetWidth()
@@ -959,27 +979,34 @@ function APT:CreateHistoryUI()
         arrow:SetJustifyH("LEFT")
         row.arrow = arrow
 
-        -- Numbers right-anchored: pct → total → base, chained rightward
+        -- Fixed-width columns at fixed offsets from the row's RIGHT edge so
+        -- every row lines up regardless of text content.
+        -- Layout (from right): [8] pct(52) [8] total(46) [8] base(46) [8] label
         local pct = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         pct:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        pct:SetWidth(52)
         pct:SetJustifyH("RIGHT")
         pct:SetTextColor(GRN[1], GRN[2], GRN[3])
         row.pct = pct
 
         local total = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        total:SetPoint("RIGHT", pct, "LEFT", -10, 0)
+        total:SetPoint("RIGHT", row, "RIGHT", -68, 0)   -- 8+52+8
+        total:SetWidth(46)
         total:SetJustifyH("RIGHT")
         row.total = total
 
         local base = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        base:SetPoint("RIGHT", total, "LEFT", -10, 0)
+        base:SetPoint("RIGHT", row, "RIGHT", -122, 0)   -- 68+46+8
+        base:SetWidth(46)
         base:SetJustifyH("RIGHT")
         row.base = base
 
+        -- label stops 8px before the base column
         local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lbl:SetPoint("LEFT",  row, "LEFT", H_LABEL, 0)
-        lbl:SetPoint("RIGHT", base, "LEFT", -8, 0)
+        lbl:SetPoint("RIGHT", row, "RIGHT", -176, 0)   -- 122+46+8
         lbl:SetJustifyH("LEFT")
+        lbl:SetWordWrap(false)
         row.lbl = lbl
 
         f.rows[i] = row

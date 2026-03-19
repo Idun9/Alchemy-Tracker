@@ -314,6 +314,17 @@ function APT:CreateSettingsUI()
         function() return APT.debugMode end,
         function(val) APT.debugMode = val end)
 
+    curY = curY - 20
+
+    local refreshBestFlaskCB = MakeCheckbox(f, "Show Best Flask in Overall Stats", S_PAD, curY,
+        function() return APT.db.char.settings.showBestFlask end,
+        function(val)
+            APT.db.char.settings.showBestFlask = val
+            if APT.historyFrame and APT.historyFrame:IsShown() then
+                APT.RefreshHistory()
+            end
+        end)
+
     curY = curY - 28
 
     -- ── Detection & Session ───────────────────────────────────────
@@ -377,6 +388,7 @@ function APT:CreateSettingsUI()
         -- Checkboxes and sliders
         refreshMiniCB()
         refreshDebugCB()
+        refreshBestFlaskCB()
         refreshCraftSl()
         refreshTimeoutSl()
         refreshMaxSessSl()

@@ -124,6 +124,7 @@ local defaults = {
             sessionTimeout   = DEFAULT_SESSION_TIMEOUT,
             maxSessions      = DEFAULT_MAX_SESSIONS,
             maxItemsPerGroup = DEFAULT_MAX_ITEMS_PER_GROUP,
+            showBestFlask    = true,
         },
     },
 }
