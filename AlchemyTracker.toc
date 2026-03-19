@@ -25,3 +25,4 @@ UI_Main.lua
 UI_History.lua
 UI_Settings.lua
 Commands.lua
+TestData.lua

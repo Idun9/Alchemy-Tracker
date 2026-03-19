@@ -69,7 +69,7 @@ APT.MakeNavButton = MakeNavButton
 local function MakeFrameCloseButton(parent)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(18, 18)
-    btn:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -8)
+    btn:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -8, -6)
     local cbg = btn:CreateTexture(nil, "BACKGROUND")
     cbg:SetAllPoints(btn)
     cbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")

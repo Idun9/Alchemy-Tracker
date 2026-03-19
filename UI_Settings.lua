@@ -249,6 +249,20 @@ function APT:CreateSettingsUI()
     histBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
     curY = curY - 28
 
+    -- ── Developer ─────────────────────────────────────────────────
+    SectionHeader("Developer")
+
+    MakeBtn(f, "Load Test Data", S_W - S_PAD * 2, 20, function()
+        APT.InjectTestData()
+        APT:Print("Test data injected — 5 sessions, 10 items.")
+        -- Refresh the session count on this button's sibling
+        if histBtn._label then
+            local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
+            histBtn._label:SetText(string.format("Browse Session History  (%d saved)", n))
+        end
+    end):SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
+    curY = curY - 28
+
     -- ── Reset ─────────────────────────────────────────────────────
     SectionHeader("Reset")
 

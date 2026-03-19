@@ -3,6 +3,83 @@
 
 local APT = AlchemyTracker
 
+-- ============================================================
+-- APT.InjectTestData
+-- Populates fake sessions and stats for UI preview.
+-- Called by /apt testdata and the Settings "Load Test Data" button.
+-- ============================================================
+function APT.InjectTestData()
+    if not APT.db or not APT.db.char then return end
+
+    local sessionDefs = APT.TEST_SESSIONS
+    if not sessionDefs then
+        APT:Print("|cffff4444No test data found.|r Add TestData.lua to your .toc and /reload once.")
+        return
+    end
+
+    local function buildStats(def)
+        local out = {}
+        for _, g in ipairs(APT.GROUPS_ORDER) do
+            local items, tc, tp, te = {}, 0, 0, 0
+            for _, it in ipairs(def[g] or {}) do
+                items[it.n] = { name=it.n, totalCrafts=it.tc, totalPotions=it.tp, totalExtra=it.te }
+                tc = tc+it.tc; tp = tp+it.tp; te = te+it.te
+            end
+            out[g] = { totalCrafts=tc, totalPotions=tp, totalExtra=te, items=items }
+        end
+        return out
+    end
+
+    -- Populate sessions
+    APT.db.char.sessions = {}
+    for i, sd in ipairs(sessionDefs) do
+        APT.db.char.sessions[i] = { id=i, date=sd.date, duration=sd.duration,
+                                     customName=sd.customName, stats=buildStats(sd) }
+    end
+    APT.db.char.nextSessionID  = #sessionDefs
+    APT.db.char.expandedSessions = {}
+
+    -- Overall + current-session stats
+    for _, g in ipairs(APT.GROUPS_ORDER) do
+        APT.db.char.stats[g] = APT.db.char.stats[g] or {}
+        local tc, tp, te = 0, 0, 0
+        for _, sd in ipairs(sessionDefs) do
+            for _, it in ipairs(sd[g] or {}) do tc=tc+it.tc; tp=tp+it.tp; te=te+it.te end
+        end
+        APT.db.char.stats[g].overall = { totalCrafts=tc, totalPotions=tp, totalExtra=te,
+            procs1=math.floor(tc*0.20), procs2=math.floor(tc*0.08),
+            procs3=math.floor(tc*0.02), procs4=0 }
+        local last = sessionDefs[#sessionDefs]
+        local ltc, ltp, lte, litems = 0, 0, 0, {}
+        for _, it in ipairs(last[g] or {}) do
+            ltc=ltc+it.tc; ltp=ltp+it.tp; lte=lte+it.te
+            litems[it.n] = { name=it.n, totalCrafts=it.tc, totalPotions=it.tp, totalExtra=it.te }
+        end
+        APT.db.char.stats[g].session = { totalCrafts=ltc, totalPotions=ltp, totalExtra=lte,
+            procs1=math.floor(ltc*0.20), procs2=math.floor(ltc*0.08),
+            procs3=math.floor(ltc*0.02), procs4=0, items=litems }
+    end
+
+    -- Open both windows side by side
+    APT.db.char.windowPos  = false
+    APT.db.char.historyPos = false
+    if APT.frame then
+        APT.frame:SetSize(APT.frame._defW or 300, APT.frame._defH or 217)
+        APT.frame:ClearAllPoints()
+        APT.frame:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
+        APT.frame:Show()
+    end
+    if APT.historyFrame then
+        APT.historyFrame:SetSize(APT.historyFrame._defW or 500, APT.historyFrame._defH or 440)
+        APT.historyFrame:ClearAllPoints()
+        APT.historyFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
+        APT.historyFrame:Show()
+    end
+    if APT.InvalidateStatsCache then APT.InvalidateStatsCache() end
+    if APT.RefreshUI             then APT.RefreshUI()             end
+    if APT.RefreshHistory        then APT.RefreshHistory()        end
+end
+
 -- Two-step confirmation state for /apt reset all
 local _resetAllPending = false
 local _resetAllTimer   = nil
@@ -191,91 +268,8 @@ function APT:HandleSlashCommand(input)
         end
 
     elseif cmdLower == "testdata" then
-        -- Inject realistic TBC fake data so the UI can be previewed
-        local fakeItems = {
-            FLASK    = { { name="Flask of Fortification",   totalCrafts=18, totalPotions=26, totalExtra=8  },
-                         { name="Flask of Relentless Assault", totalCrafts=12, totalPotions=16, totalExtra=4  } },
-            ELIXIR   = { { name="Elixir of Major Agility",  totalCrafts=25, totalPotions=34, totalExtra=9  },
-                         { name="Elixir of Major Strength", totalCrafts=10, totalPotions=13, totalExtra=3  } },
-            POTION   = { { name="Super Healing Potion",     totalCrafts=30, totalPotions=42, totalExtra=12 },
-                         { name="Super Mana Potion",        totalCrafts=20, totalPotions=27, totalExtra=7  } },
-            TRANSMUTE= { { name="Primal Might",             totalCrafts= 5, totalPotions= 7, totalExtra=2  } },
-        }
-
-        local function makeStats(mult)
-            local out = {}
-            for _, g in ipairs(APT.GROUPS_ORDER) do
-                local items = {}
-                local tc, tp, te = 0, 0, 0
-                for _, it in ipairs(fakeItems[g] or {}) do
-                    local itc = math.floor(it.totalCrafts  * mult)
-                    local itp = math.floor(it.totalPotions * mult)
-                    local ite = math.floor(it.totalExtra   * mult)
-                    items[it.name] = { name=it.name, totalCrafts=itc, totalPotions=itp, totalExtra=ite }
-                    tc = tc + itc;  tp = tp + itp;  te = te + ite
-                end
-                out[g] = { totalCrafts=tc, totalPotions=tp, totalExtra=te, items=items }
-            end
-            return out
-        end
-
-        -- Current session stats (drives the main window)
-        for _, g in ipairs(APT.GROUPS_ORDER) do
-            APT.db.char.stats[g] = APT.db.char.stats[g] or {}
-            local s = makeStats(1)[g]
-            APT.db.char.stats[g].session = {
-                totalCrafts  = s.totalCrafts,
-                totalPotions = s.totalPotions,
-                totalExtra   = s.totalExtra,
-                procs1 = math.floor(s.totalCrafts * 0.20),
-                procs2 = math.floor(s.totalCrafts * 0.08),
-                procs3 = math.floor(s.totalCrafts * 0.02),
-                procs4 = 0,
-            }
-            local ov = makeStats(4)[g]
-            APT.db.char.stats[g].overall = {
-                totalCrafts  = ov.totalCrafts,
-                totalPotions = ov.totalPotions,
-                totalExtra   = ov.totalExtra,
-                procs1 = math.floor(ov.totalCrafts * 0.20),
-                procs2 = math.floor(ov.totalCrafts * 0.08),
-                procs3 = math.floor(ov.totalCrafts * 0.02),
-                procs4 = 0,
-            }
-        end
-
-        -- Three fake past sessions
-        APT.db.char.sessions = {}
-        local dates = { "2026-03-09 14:22", "2026-03-10 19:05", "2026-03-11 21:38" }
-        local names = { nil, "Flask Farm Run", nil }
-        for i = 1, 3 do
-            table.insert(APT.db.char.sessions, {
-                id         = i,
-                date       = dates[i],
-                customName = names[i],
-                stats      = makeStats(0.5 + i * 0.3),
-            })
-        end
-
-        -- Reset positions/sizes so windows open side by side cleanly
-        APT.db.char.windowPos  = false
-        APT.db.char.historyPos = false
-        if APT.frame then
-            APT.frame:SetSize(APT.frame._defW or 380, APT.frame._defH or 250)
-            APT.frame:ClearAllPoints()
-            APT.frame:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
-            APT.frame:Show()
-        end
-        if APT.historyFrame then
-            APT.historyFrame:SetSize(APT.historyFrame._defW or 500, APT.historyFrame._defH or 440)
-            APT.historyFrame:ClearAllPoints()
-            APT.historyFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
-            APT.historyFrame:Show()
-        end
-        APT.InvalidateStatsCache()
-        APT.RefreshUI()
-        APT.RefreshHistory()
-        self:Print("Test data injected. Windows repositioned side by side.")
+        APT.InjectTestData()
+        self:Print("Test data injected — 5 sessions, 10 items. Windows opened side by side.")
 
     elseif cmdLower == "export" then
         local sess = APT.CombineAllStats("session")
