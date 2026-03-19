@@ -6,13 +6,9 @@
 
 local ADDON_NAME = ...
 
--- ============================================================
--- Addon Object
--- Exposed as AlchemyTracker global so later files can reference it.
--- ============================================================
 local APT = LibStub("AceAddon-3.0"):NewAddon("AlchemyTracker", "AceConsole-3.0", "AceEvent-3.0")
 AlchemyTracker      = APT
-APT.ADDON_NAME      = ADDON_NAME  -- used by Commands.lua for version lookup
+APT.ADDON_NAME      = ADDON_NAME
 
 -- ============================================================
 -- Mastery Spell IDs (TBC Classic)
@@ -21,16 +17,11 @@ local ELIXIR_MASTER_SPELL_ID    = 28677
 local POTION_MASTER_SPELL_ID    = 28675
 local TRANSMUTE_MASTER_SPELL_ID = 28672
 
--- ============================================================
--- Craft Configuration
--- ============================================================
--- Default values — stored in db.char.settings so they can be overridden per character.
 local DEFAULT_CRAFT_WINDOW        = 0.4   -- seconds to collect proc messages after first "You create"
 local DEFAULT_SESSION_TIMEOUT     = 900   -- 15 min inactivity → new session on next open
 local DEFAULT_MAX_SESSIONS        = 200
 local DEFAULT_MAX_ITEMS_PER_GROUP = 150   -- max unique items tracked per group per session
 
--- Runtime accessors — always read from db so overrides take effect immediately.
 local function CraftWindow()        return APT.db.char.settings.craftWindow      end
 local function SessionTimeout()     return APT.db.char.settings.sessionTimeout   end
 local function MaxSessions()        return APT.db.char.settings.maxSessions      end
@@ -44,22 +35,15 @@ local function MaxItemsPerGroup()   return APT.db.char.settings.maxItemsPerGroup
 local CRAFT_STATE = { IDLE = "IDLE", ACCUMULATING = "ACCUMULATING" }
 local craftState      = CRAFT_STATE.IDLE
 local currentCraft    = nil   -- { itemID, itemName, group, totalCreated }
-local craftTimer      = nil   -- C_Timer handle
+local craftTimer      = nil
 local sessionTimer    = nil   -- inactivity timer
 local sessionClosed   = false -- true when timeout fired; resets on next TRADE_SKILL_SHOW
 local tradeSkillOpen  = false -- true only while the alchemy tradeskill window is open
 
--- Debug mode: toggled via the Settings "Debug Mode" checkbox (APT.debugMode).
 APT.debugMode = false
 
--- ============================================================
--- Shared Item Lookup  (flat; built at load time from AlchemyTrackerItems.lua)
--- ============================================================
 local TrackedItems = {}
 
--- ============================================================
--- Stats Schema
--- ============================================================
 local GROUPS_ORDER = { "FLASK", "ELIXIR", "POTION", "TRANSMUTE" }
 APT.GROUPS_ORDER = GROUPS_ORDER
 
@@ -93,9 +77,6 @@ local function CopyStats(s)
     }
 end
 
--- ============================================================
--- AceDB Defaults
--- ============================================================
 local defaults = {
     global = {
         minimap = {},
@@ -118,7 +99,7 @@ local defaults = {
         windowPos        = false,
         historyPos       = false,
         expandedSessions = {},    -- persisted expand state for the history browser
-        sessionStartTime = false, -- epoch time when the current session started
+        sessionStartTime = false,
         settings = {
             craftWindow      = DEFAULT_CRAFT_WINDOW,
             sessionTimeout   = DEFAULT_SESSION_TIMEOUT,
@@ -129,9 +110,6 @@ local defaults = {
     },
 }
 
--- ============================================================
--- BuildTrackedItemLookup
--- ============================================================
 local function BuildTrackedItemLookup()
     if not AlchemyTrackerItemData then
         APT:Print("|cffff0000ERROR:|r AlchemyTrackerItemData not found. Check AlchemyTrackerItems.lua.")
@@ -163,9 +141,6 @@ end
 local _sessionStatsCache = nil
 APT.InvalidateStatsCache = function() _sessionStatsCache = nil end
 
--- ============================================================
--- DetectAlchemySpecialization
--- ============================================================
 local function DetectAlchemySpecialization()
     local spec        = APT.db.char.specialization
     local isElixir    = IsPlayerSpell(ELIXIR_MASTER_SPELL_ID)    or false
@@ -186,10 +161,6 @@ local function DetectAlchemySpecialization()
     return current ~= "None"
 end
 
--- ============================================================
--- UpdateStats
--- Applies one finalized craft to both session and overall scopes.
--- ============================================================
 local function UpdateStats(groupStats, totalCreated, itemID, itemName)
     local extra = totalCreated - 1
 
@@ -230,12 +201,9 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
         it.totalExtra   = it.totalExtra   + extra
     end
 
-    _sessionStatsCache = nil  -- invalidate combined-stats cache on every craft
+    _sessionStatsCache = nil
 end
 
--- ============================================================
--- FinalizeCraft
--- ============================================================
 local function FinalizeCraft()
     if craftState ~= CRAFT_STATE.ACCUMULATING then return end
     craftState = CRAFT_STATE.IDLE
@@ -294,15 +262,13 @@ local function FmtToPattern(fmt)
     return "^" .. table.concat(result) .. "$"
 end
 
--- Craft message patterns (CHAT_MSG_SKILL)
 local PAT_CREATE_SINGLE = FmtToPattern(LOOT_ITEM_CREATED_SELF          or "You create: %s.")
 local PAT_CREATE_MULTI  = FmtToPattern(LOOT_ITEM_CREATED_SELF_MULTIPLE or "You create %dx %s.")
 
 -- Server-specific proc-result format: "You create: <link> x<n>" (no trailing period).
--- Fires alongside the base craft message to indicate the total items produced (base + extras).
+-- Fires alongside the base craft message to indicate total items produced (base + extras).
 local PAT_CREATE_PROC_RESULT = "^You create: (.+) x(%d+)%.?$"
 
--- Loot message patterns (CHAT_MSG_LOOT) — proc extras
 local PAT_LOOT_SINGLE   = FmtToPattern(LOOT_ITEM_PUSHED_SELF          or "You receive loot: %s.")
 local PAT_LOOT_MULTI    = FmtToPattern(LOOT_ITEM_PUSHED_SELF_MULTIPLE or "You receive loot: %dx%s.")
 
@@ -321,8 +287,6 @@ local function ParseCreateMessage(msg)
     return nil, nil
 end
 
--- Parses the server-specific "You create: <link> x<n>" proc-result message.
--- Returns total, link (total = total items produced including the base craft).
 local function ParseProcResultMessage(msg)
     if not msg then return nil, nil end
     local link, n = msg:match(PAT_CREATE_PROC_RESULT)
@@ -339,9 +303,6 @@ local function ParseLootMessage(msg)
     return nil, nil
 end
 
--- ============================================================
--- Craft timer helpers
--- ============================================================
 local function CancelCraftTimer()
     if craftTimer then craftTimer:Cancel(); craftTimer = nil end
 end
@@ -361,7 +322,6 @@ end
 -- pending craft first, then start a fresh accumulation window for proc loot/results.
 -- ============================================================
 local function HandleCraftEvent(msg)
-    -- Mastery guard: only track if the player has an alchemy mastery specialization.
     if APT.db.char.specialization.current == "None" then return end
 
     local amount, link = ParseCreateMessage(msg)
@@ -373,9 +333,6 @@ local function HandleCraftEvent(msg)
     local group, itemName = GetTrackedGroupForItem(itemID)
     if not group then return end
 
-    -- Specialization guard: only track groups that can proc for this spec.
-    -- Elixir Master procs FLASK and ELIXIR; Potion Master procs POTION only;
-    -- Transmute Master procs TRANSMUTE only. Other groups can never proc.
     local spec = APT.db.char.specialization
     local canProc = (spec.isElixir    and (group == "FLASK" or group == "ELIXIR"))
                  or (spec.isPotion    and  group == "POTION")
@@ -470,10 +427,6 @@ local function ResetAllStats()
 end
 APT.ResetAllStats = ResetAllStats
 
--- ============================================================
--- CombineAllStats  (aggregates all groups for the main window)
--- Session scope is cached; invalidated by UpdateStats and resets.
--- ============================================================
 local function CombineAllStats(scope)
     if scope == "session" and _sessionStatsCache then
         return _sessionStatsCache
@@ -523,7 +476,6 @@ function APT:OnInitialize()
 
     BuildTrackedItemLookup()
 
-    -- UI modules (loaded after Core.lua) attach Create* methods to APT.
     if self.CreateUI         then self:CreateUI()         end
     if self.CreateHistoryUI  then self:CreateHistoryUI()  end
     if self.RegisterMinimapButton then self:RegisterMinimapButton() end
@@ -615,7 +567,6 @@ function APT:OnChatMessage(event, msg)
             return
         end
 
-        -- Standard proc loot: "You receive loot: <link>"
         if APT.db.char.specialization.current == "None" then return end
         if not tradeSkillOpen then return end
         if craftState ~= CRAFT_STATE.ACCUMULATING or not currentCraft then return end
@@ -628,18 +579,16 @@ function APT:OnChatMessage(event, msg)
             ScheduleCraftFinalize()
         end
     else
-        -- CHAT_MSG_SKILL: "You create ..." messages
         HandleCraftEvent(msg)
     end
 end
 
 function APT:OnTradeSkillClose()
     tradeSkillOpen = false
-    -- Finalize any pending craft immediately
     CancelCraftTimer()
     FinalizeCraft()
 
-    -- Start inactivity timer; fires sessionClosed if window stays closed 15 min
+    -- Start inactivity timer; fires sessionClosed after timeout
     if sessionTimer then sessionTimer:Cancel() end
     sessionTimer = C_Timer.NewTimer(SessionTimeout(), function()
         sessionTimer  = nil

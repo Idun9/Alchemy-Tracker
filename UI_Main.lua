@@ -14,7 +14,6 @@ local M_MIN_H = 217  -- minimum height enforced during resize
 local M_ROW_H = 18   -- height of each data row
 local M_PAD   = 12   -- left/right inner padding
 
--- Line value widgets (populated by CreateUI, read by RefreshUI)
 local Lines = {}
 
 -- ============================================================
@@ -148,7 +147,6 @@ function APT:CreateUI()
     MakeDivider(f, 1, curY, -1)
     curY = curY - 10
 
-    -- Session label row (fixed; stays above scroll area)
     local sessLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     sessLbl:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
     sessLbl:SetText("Session:")
@@ -161,7 +159,6 @@ function APT:CreateUI()
     sessVal:SetTextColor(1, 1, 1)
     curY = curY - M_ROW_H
 
-    -- Faint sub-divider
     local subdiv = f:CreateTexture(nil, "ARTWORK")
     subdiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  M_PAD, curY - 3)
     subdiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -M_PAD, curY - 3)
@@ -170,7 +167,6 @@ function APT:CreateUI()
     subdiv:SetVertexColor(0.40, 0.22, 0.03, 0.22)
     curY = curY - 12
 
-    -- Proc-tier rows
     local PROC_ROWS = {
         { key = "BASE", label = "Base Craft:" },
         { key = "X2",   label = "x2:"         },
@@ -192,12 +188,10 @@ function APT:CreateUI()
         curY = curY - M_ROW_H
     end
 
-    -- Divider above totals
     curY = curY - 4
     MakeDivider(f, M_PAD, curY, -M_PAD)
     curY = curY - 10
 
-    -- Total Crafts
     local tcLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     tcLbl:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
     tcLbl:SetText("Total Crafts:")
@@ -210,7 +204,6 @@ function APT:CreateUI()
     Lines["TOTAL_CRAFTS"] = tcVal
     curY = curY - M_ROW_H
 
-    -- % Gain
     local pgLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pgLbl:SetPoint("TOPLEFT", f, "TOPLEFT", M_PAD, curY)
     pgLbl:SetText("% Gain:")
@@ -222,7 +215,6 @@ function APT:CreateUI()
     pgVal:SetTextColor(GRN[1], GRN[2], GRN[3])
     Lines["PCT_GAIN"] = pgVal
 
-    -- Resize grip; saves size+position when done
     MakeResizeGrip(f, function(frame)
         APT.SaveWindowPos(frame, "windowPos")
     end)

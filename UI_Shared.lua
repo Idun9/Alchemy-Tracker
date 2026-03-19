@@ -1,13 +1,8 @@
 -- UI_Shared.lua
--- Shared UI helpers: theme colours, border drawing, button factories, dividers,
--- and the custom scrollbar builder.  Loaded after Core.lua; all UI modules
--- get a reference to these by reading fields on the APT object.
+-- Shared UI helpers: theme colours, border drawing, button factories, dividers.
 
 local APT = AlchemyTracker
 
--- ============================================================
--- Theme Colours
--- ============================================================
 local theme = {
     OR  = { 1,    0.55, 0.10        },   -- orange accent
     ORD = { 0.70, 0.33, 0.05        },   -- dark orange (button normal state)
@@ -16,11 +11,7 @@ local theme = {
 }
 APT.theme = theme
 
--- ============================================================
--- DrawBorders
--- Uses child Frame objects for all four edges so they are not
--- scissor-clipped at the parent's bottom-right pixel boundary.
--- ============================================================
+-- DrawBorders: uses child frames for edges to avoid scissor-clipping at parent boundary.
 local function DrawBorders(frame)
     local OR = theme.OR
     local function MakeLine(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
@@ -33,16 +24,13 @@ local function DrawBorders(frame)
         t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
         t:SetVertexColor(OR[1], OR[2], OR[3])
     end
-    MakeLine("TOPLEFT",    "TOPLEFT",    0, 0,  "TOPRIGHT",    "TOPRIGHT",    0,  0,  true)  -- top
-    MakeLine("BOTTOMLEFT", "BOTTOMLEFT", 0, 0,  "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0,  true)  -- bottom
-    MakeLine("TOPLEFT",    "TOPLEFT",    0, 0,  "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0,  false) -- left
-    MakeLine("TOPRIGHT",   "TOPRIGHT",  -1, 0,  "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0,  false) -- right
+    MakeLine("TOPLEFT",    "TOPLEFT",    0, 0,  "TOPRIGHT",    "TOPRIGHT",    0,  0,  true)
+    MakeLine("BOTTOMLEFT", "BOTTOMLEFT", 0, 0,  "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0,  true)
+    MakeLine("TOPLEFT",    "TOPLEFT",    0, 0,  "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0,  false)
+    MakeLine("TOPRIGHT",   "TOPRIGHT",  -1, 0,  "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0,  false)
 end
 APT.DrawBorders = DrawBorders
 
--- ============================================================
--- MakeNavButton  (labelled rectangular button)
--- ============================================================
 local function MakeNavButton(parent, label, w, h, onClick)
     local OR, ORD = theme.OR, theme.ORD
     local btn = CreateFrame("Button", nil, parent)
@@ -63,9 +51,6 @@ local function MakeNavButton(parent, label, w, h, onClick)
 end
 APT.MakeNavButton = MakeNavButton
 
--- ============================================================
--- MakeFrameCloseButton  (X button, top-right corner)
--- ============================================================
 local function MakeFrameCloseButton(parent)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(18, 18)
@@ -85,9 +70,6 @@ local function MakeFrameCloseButton(parent)
 end
 APT.MakeFrameCloseButton = MakeFrameCloseButton
 
--- ============================================================
--- MakeDivider  (1-pixel horizontal rule)
--- ============================================================
 local function MakeDivider(parent, x1, y, x2)
     local DIV = theme.DIV
     local d = parent:CreateTexture(nil, "ARTWORK")
@@ -100,10 +82,6 @@ local function MakeDivider(parent, x1, y, x2)
 end
 APT.MakeDivider = MakeDivider
 
--- ============================================================
--- MakeResizeGrip  (bottom-right corner drag handle)
--- Calls onDone(frame) after sizing stops.
--- ============================================================
 local function MakeResizeGrip(frame, onDone)
     local grip = CreateFrame("Button", nil, frame)
     grip:SetSize(16, 16)
@@ -120,11 +98,6 @@ local function MakeResizeGrip(frame, onDone)
 end
 APT.MakeResizeGrip = MakeResizeGrip
 
--- ============================================================
--- SaveWindowPos
--- Persists a frame's current size and anchor into APT.db.char[dbKey].
--- Call from OnDragStop and resize-grip OnMouseUp.
--- ============================================================
 local function SaveWindowPos(frame, dbKey)
     local point, _, relPoint, x, y = frame:GetPoint()
     APT.db.char[dbKey] = { point=point, relPoint=relPoint, x=x, y=y,
