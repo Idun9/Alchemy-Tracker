@@ -242,8 +242,12 @@ function APT:CreateSettingsUI()
     local histBtn
     histBtn = MakeBtn(f, "Browse Session History", S_W - S_PAD * 2, 20, function()
         if APT.historyFrame then
-            APT.historyFrame:Show()
-            APT.RefreshHistory()
+            if APT.historyFrame:IsShown() then
+                APT.historyFrame:Hide()
+            else
+                APT.historyFrame:Show()
+                APT.RefreshHistory()
+            end
         end
     end)
     histBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
@@ -255,11 +259,6 @@ function APT:CreateSettingsUI()
     MakeBtn(f, "Load Test Data", S_W - S_PAD * 2, 20, function()
         APT.InjectTestData()
         APT:Print("Test data injected — 5 sessions, 10 items.")
-        -- Refresh the session count on this button's sibling
-        if histBtn._label then
-            local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
-            histBtn._label:SetText(string.format("Browse Session History  (%d saved)", n))
-        end
     end):SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
     curY = curY - 28
 
@@ -316,7 +315,7 @@ function APT:CreateSettingsUI()
 
     curY = curY - 20
 
-    local refreshBestFlaskCB = MakeCheckbox(f, "Show Best Flask in Overall Stats", S_PAD, curY,
+    local refreshBestFlaskCB = MakeCheckbox(f, "Show Best Item", S_PAD, curY,
         function() return APT.db.char.settings.showBestFlask end,
         function(val)
             APT.db.char.settings.showBestFlask = val
@@ -377,12 +376,6 @@ function APT:CreateSettingsUI()
             toggleBtn._label:SetText(
                 (APT.frame and APT.frame:IsShown())
                 and "Hide Stats Window" or "Show Stats Window")
-        end
-
-        -- Session history button label
-        local n = APT.db and APT.db.char.sessions and #APT.db.char.sessions or 0
-        if histBtn._label then
-            histBtn._label:SetText(string.format("Browse Session History  (%d saved)", n))
         end
 
         -- Checkboxes and sliders

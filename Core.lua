@@ -384,6 +384,15 @@ local function HandleCraftEvent(msg)
     local group, itemName = GetTrackedGroupForItem(itemID)
     if not group then return end
 
+    -- Specialization guard: only track groups that can proc for this spec.
+    -- Elixir Master procs FLASK and ELIXIR; Potion Master procs POTION only;
+    -- Transmute Master procs TRANSMUTE only. Other groups can never proc.
+    local spec = APT.db.char.specialization
+    local canProc = (spec.isElixir    and (group == "FLASK" or group == "ELIXIR"))
+                 or (spec.isPotion    and  group == "POTION")
+                 or (spec.isTransmute and  group == "TRANSMUTE")
+    if not canProc then return end
+
     -- Finalize any previous craft unconditionally — each "You create:" is a new craft.
     CancelCraftTimer()
     FinalizeCraft()
