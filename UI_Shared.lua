@@ -121,97 +121,13 @@ end
 APT.MakeResizeGrip = MakeResizeGrip
 
 -- ============================================================
--- MakeCustomScrollbar
--- Builds a 6-pixel themed scrollbar track + draggable thumb alongside sf.
--- Returns an UpdateScrollbar() function that must be called whenever
--- the scroll position or content height changes.
---
--- Parameters:
---   parentFrame  – the window frame (for anchoring the track)
---   sf           – the ScrollFrame whose scroll it mirrors
---   sc           – the scroll child frame (to read content height)
---   topOffset    – pixels from top of parentFrame to start of track
---   botOffset    – pixels from bottom of parentFrame to end of track (positive = up)
+-- SaveWindowPos
+-- Persists a frame's current size and anchor into APT.db.char[dbKey].
+-- Call from OnDragStop and resize-grip OnMouseUp.
 -- ============================================================
-local function MakeCustomScrollbar(parentFrame, sf, sc, topOffset, botOffset)
-    local OR = theme.OR
-    local SB_W = 6
-
-    local sb = CreateFrame("Frame", nil, parentFrame)
-    sb:SetPoint("TOPRIGHT",    parentFrame, "TOPRIGHT",    -4, -topOffset)
-    sb:SetPoint("BOTTOMRIGHT", parentFrame, "BOTTOMRIGHT", -4,  botOffset)
-    sb:SetWidth(SB_W)
-
-    local sbTrack = sb:CreateTexture(nil, "BACKGROUND")
-    sbTrack:SetAllPoints(sb)
-    sbTrack:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    sbTrack:SetVertexColor(0.12, 0.12, 0.12)
-
-    local thumb = CreateFrame("Button", nil, sb)
-    thumb:SetWidth(SB_W)
-    thumb:SetHeight(40)
-    thumb:SetPoint("TOPLEFT",  sb, "TOPLEFT",  0, 0)
-    thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, 0)
-    local thumbTex = thumb:CreateTexture(nil, "BACKGROUND")
-    thumbTex:SetAllPoints(thumb)
-    thumbTex:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 0.65)
-    thumb:SetScript("OnEnter", function() thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 1.00) end)
-    thumb:SetScript("OnLeave", function() thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 0.65) end)
-
-    -- Repositions the thumb to reflect the current scroll position.
-    local function UpdateScrollbar()
-        local contentH  = sc:GetHeight()
-        local viewH     = sf:GetHeight()
-        local scrollRange = sf:GetVerticalScrollRange()
-        if contentH <= viewH or scrollRange == 0 then
-            thumb:Hide(); return
-        end
-        thumb:Show()
-        local trackH   = sb:GetHeight()
-        local thumbH   = math.max(20, trackH * (viewH / contentH))
-        local scrollPct = sf:GetVerticalScroll() / scrollRange
-        local offsetY   = (trackH - thumbH) * scrollPct
-        thumb:SetHeight(thumbH)
-        thumb:ClearAllPoints()
-        thumb:SetPoint("TOPLEFT",  sb, "TOPLEFT",  0, -offsetY)
-        thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, -offsetY)
-    end
-
-    -- Mouse-wheel scrolling on the scroll frame
-    sf:EnableMouseWheel(true)
-    sf:SetScript("OnMouseWheel", function(self, delta)
-        local cur = self:GetVerticalScroll()
-        local max = self:GetVerticalScrollRange()
-        self:SetVerticalScroll(math.max(0, math.min(max, cur - delta * 20)))
-        UpdateScrollbar()
-    end)
-
-    -- Drag thumb to scroll
-    local dragStartY, dragStartScroll = 0, 0
-    thumb:RegisterForClicks("LeftButtonUp")
-    thumb:SetScript("OnMouseDown", function(_, btn)
-        if btn ~= "LeftButton" then return end
-        dragStartY      = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
-        dragStartScroll = sf:GetVerticalScroll()
-        thumb:SetScript("OnUpdate", function()
-            local curY   = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
-            local delta  = dragStartY - curY
-            local trackH = sb:GetHeight()
-            local thumbH = thumb:GetHeight()
-            local maxS   = sf:GetVerticalScrollRange()
-            if trackH > thumbH then
-                sf:SetVerticalScroll(math.max(0, math.min(maxS,
-                    dragStartScroll + delta * maxS / (trackH - thumbH))))
-                UpdateScrollbar()
-            end
-        end)
-    end)
-    thumb:SetScript("OnMouseUp", function()
-        thumb:SetScript("OnUpdate", nil)
-        UpdateScrollbar()
-    end)
-
-    return UpdateScrollbar
+local function SaveWindowPos(frame, dbKey)
+    local point, _, relPoint, x, y = frame:GetPoint()
+    APT.db.char[dbKey] = { point=point, relPoint=relPoint, x=x, y=y,
+                           w=frame:GetWidth(), h=frame:GetHeight() }
 end
-APT.MakeCustomScrollbar = MakeCustomScrollbar
+APT.SaveWindowPos = SaveWindowPos

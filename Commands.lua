@@ -46,9 +46,9 @@ function APT.InjectTestData()
         for _, sd in ipairs(sessionDefs) do
             for _, it in ipairs(sd[g] or {}) do tc=tc+it.tc; tp=tp+it.tp; te=te+it.te end
         end
+        -- procs1 = te: treat every extra item as a separate +1 proc (conservative but consistent)
         APT.db.char.stats[g].overall = { totalCrafts=tc, totalPotions=tp, totalExtra=te,
-            procs1=math.floor(tc*0.20), procs2=math.floor(tc*0.08),
-            procs3=math.floor(tc*0.02), procs4=0 }
+            procs1=te, procs2=0, procs3=0, procs4=0 }
         local last = sessionDefs[#sessionDefs]
         local ltc, ltp, lte, litems = 0, 0, 0, {}
         for _, it in ipairs(last[g] or {}) do
@@ -56,8 +56,7 @@ function APT.InjectTestData()
             litems[it.n] = { name=it.n, totalCrafts=it.tc, totalPotions=it.tp, totalExtra=it.te }
         end
         APT.db.char.stats[g].session = { totalCrafts=ltc, totalPotions=ltp, totalExtra=lte,
-            procs1=math.floor(ltc*0.20), procs2=math.floor(ltc*0.08),
-            procs3=math.floor(ltc*0.02), procs4=0, items=litems }
+            procs1=lte, procs2=0, procs3=0, procs4=0, items=litems }
     end
 
     -- Open both windows side by side

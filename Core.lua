@@ -49,8 +49,8 @@ local sessionTimer    = nil   -- inactivity timer
 local sessionClosed   = false -- true when timeout fired; resets on next TRADE_SKILL_SHOW
 local tradeSkillOpen  = false -- true only while the alchemy tradeskill window is open
 
--- Debug mode: set to true to log chat events. Cannot be toggled at runtime.
-local DEBUG = false
+-- Debug mode: toggled via the Settings "Debug Mode" checkbox (APT.debugMode).
+APT.debugMode = false
 
 -- ============================================================
 -- Shared Item Lookup  (flat; built at load time from AlchemyTrackerItems.lua)
@@ -157,17 +157,6 @@ local function GetTrackedGroupForItem(itemID)
     if info then return info.group, info.name end
     return nil, nil
 end
-
--- ============================================================
--- CalcPctGain  (extra items / total items × 100, formatted)
--- ============================================================
-local function CalcPctGain(s)
-    if s.totalPotions > 0 then
-        return string.format("+%.1f%%", (s.totalExtra / s.totalPotions) * 100)
-    end
-    return "+0.0%"
-end
-APT.CalcPctGain = CalcPctGain   -- used by UI_History.lua
 
 -- Session-stats cache: invalidated by UpdateStats, ResetSessionStats, ResetAllStats.
 -- Declared here so all three functions share the same upvalue as CombineAllStats.
@@ -592,7 +581,7 @@ function APT:OnSkillLinesChanged()
 end
 
 function APT:OnChatMessage(event, msg)
-    if DEBUG then
+    if APT.debugMode then
         -- Strip hyperlinks and colour codes for readable debug output
         local clean = msg and msg
             :gsub("|H[^|]*|h(.-)|h", "%1")

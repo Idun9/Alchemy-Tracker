@@ -100,9 +100,7 @@ function APT:CreateUI()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function()
         f:StopMovingOrSizing()
-        local point, _, relPoint, x, y = f:GetPoint()
-        APT.db.char.windowPos = { point=point, relPoint=relPoint, x=x, y=y,
-                                  w=f:GetWidth(), h=f:GetHeight() }
+        APT.SaveWindowPos(f, "windowPos")
     end)
 
     -- Enforce minimum size live during resize drag
@@ -226,8 +224,6 @@ function APT:CreateUI()
 
     -- Resize grip; saves size+position when done
     MakeResizeGrip(f, function(frame)
-        local point, _, relPoint, x, y = frame:GetPoint()
-        APT.db.char.windowPos = { point=point, relPoint=relPoint, x=x, y=y,
-                                  w=frame:GetWidth(), h=frame:GetHeight() }
+        APT.SaveWindowPos(frame, "windowPos")
     end)
 end

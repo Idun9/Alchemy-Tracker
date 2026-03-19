@@ -12,10 +12,10 @@ local H_DEF_H    = 440
 local H_ROW      = 20
 local H_ARROW    = 8
 local H_LABEL    = 26
-local H_MAX_ROWS = 120
+local H_MAX_ROWS = 500
 
 -- Panel heights / offsets
-local HEADER_BOT = 50    -- y from top where panels begin (below title/divider)
+local HEADER_BOT = 36    -- y from top where panels begin (below title/divider)
 local FP_HDR_H   = 26    -- filter panel header height (collapsed)
 local FP_CNT_H   = 60    -- filter panel content height (when expanded)
 local SP_H       = 22    -- overall stats panel height
@@ -26,6 +26,7 @@ local SB_W       = 6     -- scrollbar width
 -- ============================================================
 local expandedSessions = {}
 local selectedItems    = {}   -- name -> true
+local filterCount      = 0    -- kept in sync with selectedItems; avoids table iteration
 local filterExpanded   = false
 
 local function SaveExpandedState()
@@ -46,25 +47,26 @@ end
 local function ToggleItem(name)
     if selectedItems[name] then
         selectedItems[name] = nil
+        filterCount = filterCount - 1
     else
         selectedItems[name] = true
+        filterCount = filterCount + 1
     end
     APT.RefreshHistory()
 end
 
 local function ClearFilter()
     wipe(selectedItems)
+    filterCount = 0
     APT.RefreshHistory()
 end
 
 local function HasFilter()
-    return next(selectedItems) ~= nil
+    return filterCount > 0
 end
 
 local function FilterCount()
-    local n = 0
-    for _ in pairs(selectedItems) do n = n + 1 end
-    return n
+    return filterCount
 end
 
 -- ============================================================
@@ -407,7 +409,6 @@ APT.RefreshHistory = function()
     local function AddSessionHeader(label, key, combined, sessObj)
         local r = UseRow(22)
         if not r then return end
-        if r._accent then r._accent:Hide() end
         r.arrow:SetText(expandedSessions[key] and "▼" or "▶")
         local displayLabel = (sessObj and sessObj.customName)
             and (sessObj.customName .. "  —  " .. (sessObj.date or ""))
@@ -436,7 +437,6 @@ APT.RefreshHistory = function()
     local function AddItemColHeader()
         local r = UseRow(18)
         if not r then return end
-        if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
         r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
@@ -453,7 +453,6 @@ APT.RefreshHistory = function()
     local function AddItemRow(it)
         local r = UseRow()
         if not r then return end
-        if r._accent then r._accent:Hide() end
         local sel = selectedItems[it.name]
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
@@ -481,7 +480,6 @@ APT.RefreshHistory = function()
     local function AddTotalRow(combined)
         local r = UseRow()
         if not r then return end
-        if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 10, 0)
         r.lbl:SetPoint("RIGHT", r, "RIGHT", -176, 0)
@@ -575,9 +573,7 @@ function APT:CreateHistoryUI()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function()
         f:StopMovingOrSizing()
-        local point, _, relPoint, x, y = f:GetPoint()
-        APT.db.char.historyPos = { point=point, relPoint=relPoint, x=x, y=y,
-                                   w=f:GetWidth(), h=f:GetHeight() }
+        APT.SaveWindowPos(f, "historyPos")
     end)
 
     local _clamp = false
@@ -601,16 +597,11 @@ function APT:CreateHistoryUI()
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -12)
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -10)
     title:SetText("Crafting Session Tracker")
     title:SetTextColor(OR[1], OR[2], OR[3])
 
-    local sub = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    sub:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -30)
-    sub:SetText("Track your alchemy proc rates and session statistics")
-    sub:SetTextColor(0.50, 0.50, 0.50)
-
-    MakeDivider(f, 8, -46, -8)
+    MakeDivider(f, 8, -30, -8)
     MakeFrameCloseButton(f)
 
     -- ── Filter Panel ──────────────────────────────────────────
@@ -943,9 +934,7 @@ function APT:CreateHistoryUI()
 
     -- ── Resize Grip ────────────────────────────────────────────
     MakeResizeGrip(f, function(frame)
-        local point, _, relPoint, x, y = frame:GetPoint()
-        APT.db.char.historyPos = { point=point, relPoint=relPoint, x=x, y=y,
-                                   w=frame:GetWidth(), h=frame:GetHeight() }
+        APT.SaveWindowPos(frame, "historyPos")
         UpdateScrollbar()
     end)
 
