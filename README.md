@@ -64,3 +64,13 @@ Should return `Flask of Fortification`. Use this to spot-check any item ID in `A
 Any printed line indicates a wrong item ID.
 
 **Full test:** Craft 5–10 of a cheap elixir with Elixir Master active, then open `/at show` and confirm Total Crafts incremented and the item count matches what you received.
+
+## Acknowledgements
+
+This addon is built on top of several open-source libraries from the WoW addon community:
+
+- **[Ace3](https://www.wowace.com/projects/ace3)** — addon framework by the Ace3 Development Team. Provides the addon lifecycle (`AceAddon-3.0`), slash command handling (`AceConsole-3.0`), event management (`AceEvent-3.0`), and saved variables (`AceDB-3.0`).
+- **[LibDataBroker-1.1](https://www.wowace.com/projects/libdatabroker-1-1)** — lightweight data broker interface used to expose the minimap button data object.
+- **[LibDBIcon-1.0](https://www.wowace.com/projects/libdbicon-1-0)** — minimap icon registration and persistence by funkehdude.
+
+Without these libraries the addon would require significantly more boilerplate to achieve the same functionality. Thank you to everyone who has contributed to the WoW addon ecosystem.
