@@ -1,60 +1,66 @@
-# Alchemy-Tracker
-TBC alchemy tracker for wow procs
+# Alchemy Tracker
 
----
-1. Verify it loads without errors
+A TBC Classic addon that tracks alchemy mastery proc rates across crafting sessions.
 
-Install the addon folder into your WoW directory, log in, and check the chat window on login. The addon prints:
-[Alchemy Tracker] Loaded. Type /apt for help.
-If it errors instead, the Lua error message will tell you exactly which line is broken.
+## Features
 
-Also run:
-/apt show
-The stats window should appear. If it does, the UI and saved variables are working.
+- Tracks proc counts and rates for Elixir Master (flasks + elixirs), Potion Master, and Transmute Master
+- Session history browser with per-item breakdown and filter support
+- Overall stats banner showing aggregate proc rate across all sessions
+- Session auto-save on inactivity timeout; rename sessions via right-click
+- Minimap button with left-click toggle and right-click menu
 
----
-2. Verify item IDs are correct without crafting
+## Installation
 
-In-game chat, type:
-/run print(GetItemInfo(22851))
-If it returns "Flask of Fortification" you know that item ID is correct. You can spot-check any suspicious ID this
-way.
+1. Copy the `AlchemyTracker` folder into `World of Warcraft/_classic_tbc_/Interface/AddOns/`
+2. Log in and open the alchemy tradeskill window — specialization is detected automatically
 
-To check a whole group at once, paste this into the chat box:
-/run for id, name in pairs(AlchemyTrackerItemData["TBC"]["FLASK"]) do local n = GetItemInfo(id); if n ~= name then
-print("MISMATCH", id, name, "->", tostring(n)) end end
-Any line where the stored name doesn't match what the game returns is a wrong ID.
+## Commands
 
----
-3. Simulate a craft event
+Type `/at` for the version and a pointer to the command list.
+Type `/at commands` for the full list:
 
-The addon listens to CHAT_MSG_SKILL. You can fire a fake one directly in-game:
+| Command | Description |
+|---|---|
+| `/at show` | Open the stats window |
+| `/at hide` | Close the stats window |
+| `/at history` | Open session history |
+| `/at options` | Open settings |
+| `/at reset` | Reset current session stats |
+| `/at reset all` | Reset all stats including overall |
+| `/at resetpos` | Reset window positions to default |
+| `/at debug` | Toggle debug mode (logs raw chat events) |
 
-/run local f = _G["AlchemyProcTrackerEventFrame"] -- won't work since it's local
+## Specialization Support
 
-Since the event frame is local, the easier approach is to craft something cheap that's in the list — like Elixir of
-Fortitude (Classic) or any low-reagent TBC elixir — and watch for:
-- A proc message in chat if you get extra items
-- The stats updating in /apt show
+Only one specialization is active at a time. The addon enforces this:
 
----
-4. Confirm specialization detection
+- **Elixir Master** — tracks flasks and elixirs
+- **Potion Master** — tracks potions only
+- **Transmute Master** — tracks transmutes only
 
+Items crafted outside your specialization (e.g. a Transmute Master crafting a potion) are ignored since they can never proc.
+
+## Verifying It Works
+
+**Check specialization detection:**
+```
 /run print(IsPlayerSpell(28677))  -- Elixir Master
 /run print(IsPlayerSpell(28675))  -- Potion Master
 /run print(IsPlayerSpell(28672))  -- Transmute Master
-Should print true for whichever mastery your character has.
+```
+Should print `true` for your character's mastery.
 
----
-5. Check the event channel
+**Verify an item ID:**
+```
+/run print(GetItemInfo(22851))
+```
+Should return `Flask of Fortification`. Use this to spot-check any item ID in `AlchemyTrackerItems.lua`.
 
-The addon uses CHAT_MSG_SKILL — if you craft something and no proc tracking happens, the "You create" message might be
-coming through CHAT_MSG_SYSTEM instead. You can check by temporarily adding this before logging in:
+**Check a whole group at once:**
+```
+/run for id, name in pairs(AlchemyTrackerItemData["TBC"]["FLASK"]) do local n = GetItemInfo(id); if n ~= name then print("MISMATCH", id, name, "->", tostring(n)) end end
+```
+Any printed line indicates a wrong item ID.
 
--- Add temporarily to AlchemyProcTracker.lua for debugging
-eventFrame:RegisterEvent("CHAT_MSG_SYSTEM")
-Then swap CHAT_MSG_SKILL → CHAT_MSG_SYSTEM in the OnEvent handler if that's where the messages appear.
-
----
-The most reliable full test is: craft 5–10 of a cheap elixir with Elixir Master, then /apt show and verify Total
-Crafts incremented and Total Items Produced matches what you actually received.
+**Full test:** Craft 5–10 of a cheap elixir with Elixir Master active, then open `/at show` and confirm Total Crafts incremented and the item count matches what you received.
