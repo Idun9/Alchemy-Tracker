@@ -4,7 +4,7 @@
 ## Author: Idun9
 ## Version: 1.1.0
 ## SavedVariables: AlchemyProcTrackerDB
-## IconTexture: Interface\AddOns\AlchemyTracker\icon\alchemy-300x300CroppedExtracted_uncompressed
+## IconTexture: Interface\AddOns\AlchemyTracker\icon\icon
 
 lib\Ace3\LibStub\LibStub.lua
 lib\Ace3\CallbackHandler-1.0\CallbackHandler-1.0.xml
