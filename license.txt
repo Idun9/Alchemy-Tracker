@@ -1,0 +1,22 @@
+Copyright (c) 2026 Idun9. All rights reserved.
+
+Permission is hereby granted to any person obtaining a copy of this addon (the "Software") to:
+
+- Use the Software for personal and non-commercial purposes.
+- Modify the Software for personal and non-commercial purposes.
+
+You are NOT allowed to:
+
+- Sell, license, or otherwise commercially exploit the Software or any modified version.
+- Redistribute the Software or modified versions in exchange for money or any commercial advantage.
+- Claim you are the original author of the Software.
+
+Redistribution:
+
+You may redistribute the original or modified versions of the Software for free,
+provided that:
+
+- This copyright notice and license text are included.
+- Clear attribution to the original author (Idun9) is maintained.
+
+The Software is provided "as is", without warranty of any kind.
