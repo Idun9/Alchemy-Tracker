@@ -1,6 +1,6 @@
 -- UI_History.lua
--- Session history browser: collapsible tree (Sessions → Groups → Items)
--- plus Overall stats banner and the session rename dialog.
+-- Session history browser: collapsible tree (Sessions → Items)
+-- with filter-by-item panel, overall stats banner, and item-click filtering.
 
 local APT = AlchemyTracker
 
@@ -18,12 +18,19 @@ local H_PCT      = 420
 local H_COL_W    = 54
 local H_MAX_ROWS = 120
 
+-- Panel heights / offsets
+local HEADER_BOT = 62    -- y from top where panels begin (below title/divider)
+local FP_HDR_H   = 26    -- filter panel header height (collapsed)
+local FP_CNT_H   = 60    -- filter panel content height (when expanded)
+local SP_H       = 26    -- overall stats panel height
+local SB_W       = 6     -- scrollbar width
+
 -- ============================================================
--- Expansion state
--- Keys: "overall" or "sid_<id>" where id is the session's stable ID.
--- Synced to db.char.expandedSessions for persistence across reloads.
+-- State
 -- ============================================================
 local expandedSessions = {}
+local selectedItems    = {}   -- name -> true
+local filterExpanded   = false
 
 local function SaveExpandedState()
     if not APT.db or not APT.db.char then return end
@@ -40,11 +47,31 @@ local function ToggleExpanded(key)
     APT.RefreshHistory()
 end
 
+local function ToggleItem(name)
+    selectedItems[name] = selectedItems[name] and nil or true
+    APT.RefreshHistory()
+end
+
+local function ClearFilter()
+    wipe(selectedItems)
+    APT.RefreshHistory()
+end
+
+local function HasFilter()
+    return next(selectedItems) ~= nil
+end
+
+local function FilterCount()
+    local n = 0
+    for _ in pairs(selectedItems) do n = n + 1 end
+    return n
+end
+
 -- ============================================================
 -- Session Rename Dialog  (lazily created)
 -- ============================================================
 local RenameFrame
-local RenameTarget  -- sess object being renamed
+local RenameTarget
 
 local function ShowRenameDialog(sess)
     if not RenameFrame then
@@ -117,21 +144,12 @@ local function ShowRenameDialog(sess)
 end
 
 -- ============================================================
--- Helper: stable session key
--- Uses the session's numeric ID when available, then falls back
--- to the date string, then to a stringified index.
--- This prevents expansion-state collisions after session deletion.
+-- Helpers
 -- ============================================================
 local function SessionKey(sess, idx)
     return "sid_" .. (sess.id or ("d_" .. (sess.date or tostring(idx))))
 end
 
--- ============================================================
--- APT.RefreshHistory
--- Rebuilds the row pool from the current sessions list.
--- No-ops when the window is hidden.
--- ============================================================
--- Format seconds as "45m" or "1h 12m"
 local function FormatDuration(secs)
     if not secs or secs < 60 then return nil end
     local h = math.floor(secs / 3600)
@@ -145,30 +163,171 @@ local function CalcProcPct(s)
     return string.format("%.1f%%", s.totalExtra / s.totalCrafts * 100)
 end
 
-local function CombineGroups(statsMap)
+-- Combine groups with optional item-name filter
+local function CombineGroups(statsMap, filter)
+    local useFilter = filter and next(filter) ~= nil
     local s = { totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
     for _, g in ipairs(APT.GROUPS_ORDER) do
         local gs = statsMap[g]
         if gs then
-            s.totalCrafts  = s.totalCrafts  + gs.totalCrafts
-            s.totalPotions = s.totalPotions + gs.totalPotions
-            s.totalExtra   = s.totalExtra   + gs.totalExtra
+            if not useFilter then
+                s.totalCrafts  = s.totalCrafts  + gs.totalCrafts
+                s.totalPotions = s.totalPotions + gs.totalPotions
+                s.totalExtra   = s.totalExtra   + gs.totalExtra
+            elseif gs.items then
+                for _, it in pairs(gs.items) do
+                    if filter[it.name] then
+                        s.totalCrafts  = s.totalCrafts  + it.totalCrafts
+                        s.totalPotions = s.totalPotions + it.totalPotions
+                        s.totalExtra   = s.totalExtra   + it.totalExtra
+                    end
+                end
+            end
         end
     end
     return s
 end
 
+-- Returns up to `limit` item names sorted by total potions across all sessions
+local function GetTopItems(sessions, limit)
+    local byName = {}
+    for _, sess in ipairs(sessions) do
+        for _, g in ipairs(APT.GROUPS_ORDER) do
+            local gs = sess.stats and sess.stats[g]
+            if gs and gs.items then
+                for _, it in pairs(gs.items) do
+                    if not byName[it.name] then
+                        byName[it.name] = { name = it.name, totalPotions = 0 }
+                    end
+                    byName[it.name].totalPotions = byName[it.name].totalPotions + (it.totalPotions or 0)
+                end
+            end
+        end
+    end
+    local list = {}
+    for _, v in pairs(byName) do list[#list + 1] = v end
+    table.sort(list, function(a, b) return a.totalPotions > b.totalPotions end)
+    local result = {}
+    for i = 1, math.min(limit or 5, #list) do
+        result[i] = list[i].name
+    end
+    return result
+end
+
+-- ============================================================
+-- APT.RefreshHistory
+-- ============================================================
 APT.RefreshHistory = function()
     local f = APT.historyFrame
     if not f or not f:IsShown() then return end
     if not APT.db then return end
 
-    local OR, GRN = APT.theme.OR, APT.theme.GRN
-    local sc       = f.sc
-    local rows     = f.rows
+    local OR, GRN  = APT.theme.OR, APT.theme.GRN
     local sessions = APT.db.char.sessions or {}
 
-    -- Hide and reset all pooled rows
+    -- ── Update layout (filter panel height drives sp/sf position) ──
+    local fp = f.filterPanel
+    if fp then
+        local cnt = FilterCount()
+        fp.hdrArrow:SetText(filterExpanded and "▼" or "▶")
+        fp.hdrCount:SetText(cnt > 0 and ("(" .. cnt .. " selected)") or "")
+        if cnt > 0 then fp.clearBtn:Show() else fp.clearBtn:Hide() end
+
+        if filterExpanded then
+            fp.content:Show()
+            fp:SetHeight(FP_HDR_H + FP_CNT_H)
+
+            local searchStr = fp.searchBox:GetText() or ""
+            searchStr = searchStr:lower():match("^%s*(.-)%s*$") or ""
+
+            local showItems
+            if searchStr ~= "" then
+                local all = GetTopItems(sessions, 200)
+                showItems = {}
+                for _, name in ipairs(all) do
+                    if name:lower():find(searchStr, 1, true) then
+                        showItems[#showItems + 1] = name
+                        if #showItems >= 5 then break end
+                    end
+                end
+                fp.sectionLabel:SetText(#showItems > 0 and "Search Results" or "No items found")
+            else
+                fp.sectionLabel:SetText("Top 5 Most Crafted")
+                showItems = GetTopItems(sessions, 5)
+            end
+
+            for i = 1, 5 do
+                local btn = fp.itemBtns[i]
+                local name = showItems[i]
+                if name then
+                    btn._name = name
+                    btn.lbl:SetText(name)
+                    btn:Show()
+                    if selectedItems[name] then
+                        btn.bg:SetVertexColor(OR[1] * 0.28, OR[2] * 0.28, OR[3] * 0.28, 0.95)
+                        btn.lbl:SetTextColor(OR[1], OR[2], OR[3])
+                    else
+                        btn.bg:SetVertexColor(0.10, 0.08, 0.04, 0.85)
+                        btn.lbl:SetTextColor(0.65, 0.65, 0.65)
+                    end
+                else
+                    btn._name = nil
+                    btn:Hide()
+                end
+            end
+        else
+            fp.content:Hide()
+            fp:SetHeight(FP_HDR_H)
+        end
+
+        -- Reposition stats panel and scroll frame based on fp height
+        local fpH   = filterExpanded and (FP_HDR_H + FP_CNT_H) or FP_HDR_H
+        local spTop = HEADER_BOT + fpH + 4
+        local sfTop = spTop + SP_H + 4
+
+        f.statsPanel:ClearAllPoints()
+        f.statsPanel:SetPoint("TOPLEFT",  f, "TOPLEFT",  8,   -spTop)
+        f.statsPanel:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -spTop)
+
+        f.sf:ClearAllPoints()
+        f.sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,           -sfTop)
+        f.sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(SB_W + 10), 8)
+
+        f._sb:ClearAllPoints()
+        f._sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -4, -sfTop)
+        f._sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4,  8)
+    end
+
+    -- ── Overall stats banner ───────────────────────────────────
+    local sp = f.statsPanel
+    if sp then
+        local combined
+        if HasFilter() then
+            local s = { totalCrafts = 0, totalPotions = 0, totalExtra = 0 }
+            for _, sess in ipairs(sessions) do
+                local fc = CombineGroups(sess.stats or {}, selectedItems)
+                s.totalCrafts  = s.totalCrafts  + fc.totalCrafts
+                s.totalPotions = s.totalPotions + fc.totalPotions
+                s.totalExtra   = s.totalExtra   + fc.totalExtra
+            end
+            combined = s
+        else
+            local ovMap = {}
+            for _, g in ipairs(APT.GROUPS_ORDER) do
+                ovMap[g] = APT.db.char.stats[g] and APT.db.char.stats[g].overall
+            end
+            combined = CombineGroups(ovMap, nil)
+        end
+        sp.labelTitle:SetText(HasFilter() and "Filtered Stats" or "Overall Stats")
+        sp.labelBase:SetText("Base: "  .. tostring(combined.totalCrafts))
+        sp.labelTotal:SetText("Total: " .. tostring(combined.totalPotions))
+        sp.labelProc:SetText("Proc: "  .. CalcProcPct(combined))
+    end
+
+    -- ── Rebuild session rows ───────────────────────────────────
+    local sc   = f.sc
+    local rows = f.rows
+
     for _, r in ipairs(rows) do
         r:Hide()
         r.btn:SetScript("OnClick", nil)
@@ -207,38 +366,9 @@ APT.RefreshHistory = function()
         r.rbg:SetVertexColor(rr, gg, bb, aa)
     end
 
-    -- ── Overall Stats banner ──────────────────────────────────
-    local function AddOverallBanner(combined)
-        local r = UseRow(22)
-        if not r then return end
-        local expanded = expandedSessions["overall"]
-        r.arrow:SetText(expanded and "▼" or "▶")
-        r.lbl:SetText("Overall Stats")
-        r.lbl:SetTextColor(1, 1, 1)
-        r.lbl:SetFont(r.lbl:GetFont(), select(2, r.lbl:GetFont()) or 12, "OUTLINE")
-        if combined.totalCrafts > 0 then
-            r.base:SetText(tostring(combined.totalCrafts))
-            r.total:SetText(tostring(combined.totalPotions))
-            r.pct:SetText(CalcProcPct(combined))
-        end
-        SetRowBg(r, OR[1]*0.18, OR[2]*0.18, OR[3]*0.18, 0.90)
-        -- Orange left accent bar
-        if not r._accent then
-            local acc = r:CreateTexture(nil, "ARTWORK")
-            acc:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-            acc:SetVertexColor(OR[1], OR[2], OR[3])
-            acc:SetPoint("TOPLEFT",    r, "TOPLEFT",    0, 0)
-            acc:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", 0, 0)
-            acc:SetWidth(3)
-            r._accent = acc
-        end
-        r._accent:Show()
-        r.btn:SetScript("OnClick", function() ToggleExpanded("overall") end)
-    end
-
-    -- ── Session header row ────────────────────────────────────
+    -- Session header row
     local function AddSessionHeader(label, key, combined, sessObj)
-        local r = UseRow()
+        local r = UseRow(22)
         if not r then return end
         if r._accent then r._accent:Hide() end
         r.arrow:SetText(expandedSessions[key] and "▼" or "▶")
@@ -265,22 +395,52 @@ APT.RefreshHistory = function()
         end)
     end
 
-    -- ── Item row ──────────────────────────────────────────────
-    local function AddItemRow(it)
-        local r = UseRow()
+    -- Item column header row (shown inside expanded session)
+    local function AddItemColHeader()
+        local r = UseRow(18)
         if not r then return end
         if r._accent then r._accent:Hide() end
         r.lbl:ClearAllPoints()
         r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
         r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
-        r.lbl:SetText(it.name)
-        r.lbl:SetTextColor(0.65, 0.65, 0.65)
-        r.base:SetText(tostring(it.totalCrafts))   r.base:SetTextColor(0.65, 0.65, 0.65)
-        r.total:SetText(tostring(it.totalPotions)) r.total:SetTextColor(0.65, 0.65, 0.65)
-        r.pct:SetText(CalcProcPct(it))
+        r.lbl:SetText("Item")
+        r.lbl:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
+        r.base:SetText("Base")   r.base:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
+        r.total:SetText("Total") r.total:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
+        r.pct:SetText("Proc%")   r.pct:SetTextColor(OR[1] * 0.75, OR[2] * 0.75, OR[3] * 0.75)
+        SetRowBg(r, 0.07, 0.05, 0.02, 0.85)
+        r.arrow:SetText("")
     end
 
-    -- ── Total row ─────────────────────────────────────────────
+    -- Clickable item row
+    local function AddItemRow(it)
+        local r = UseRow()
+        if not r then return end
+        if r._accent then r._accent:Hide() end
+        local sel = selectedItems[it.name]
+        r.lbl:ClearAllPoints()
+        r.lbl:SetPoint("LEFT",  r, "LEFT", H_LABEL + 22, 0)
+        r.lbl:SetPoint("RIGHT", r, "LEFT", H_BASE - 4,   0)
+        r.lbl:SetText(it.name)
+        if sel then
+            r.lbl:SetTextColor(OR[1], OR[2], OR[3])
+            r.base:SetTextColor(OR[1], OR[2], OR[3])
+            r.total:SetTextColor(OR[1], OR[2], OR[3])
+            SetRowBg(r, OR[1] * 0.08, OR[2] * 0.08, OR[3] * 0.08, 0.60)
+        else
+            r.lbl:SetTextColor(0.65, 0.65, 0.65)
+            r.base:SetTextColor(0.65, 0.65, 0.65)
+            r.total:SetTextColor(0.65, 0.65, 0.65)
+            SetRowBg(r, 0, 0, 0, 0)
+        end
+        r.base:SetText(tostring(it.totalCrafts))
+        r.total:SetText(tostring(it.totalPotions))
+        r.pct:SetText(CalcProcPct(it))
+        local name = it.name
+        r.btn:SetScript("OnClick", function() ToggleItem(name) end)
+    end
+
+    -- Session total summary row
     local function AddTotalRow(combined)
         local r = UseRow()
         if not r then return end
@@ -296,35 +456,30 @@ APT.RefreshHistory = function()
         SetRowBg(r, 0.08, 0.07, 0.03, 0.50)
     end
 
-    -- Collects items from all groups in statsMap and renders them sorted by name.
     local function RenderAllItems(statsMap)
         local sorted = {}
         for _, g in ipairs(APT.GROUPS_ORDER) do
-            local s = statsMap and statsMap[g]
-            if s and s.items then
-                for _, it in pairs(s.items) do sorted[#sorted + 1] = it end
+            local gs = statsMap and statsMap[g]
+            if gs and gs.items then
+                for _, it in pairs(gs.items) do
+                    if not HasFilter() or selectedItems[it.name] then
+                        sorted[#sorted + 1] = it
+                    end
+                end
             end
         end
         table.sort(sorted, function(a, b) return a.name < b.name end)
-        for _, it in ipairs(sorted) do AddItemRow(it) end
+        if #sorted > 0 then
+            AddItemColHeader()
+            for _, it in ipairs(sorted) do AddItemRow(it) end
+        end
     end
 
-    -- ── Overall stats banner (top of list) ───────────────────
-    local ovMap = {}
-    for _, g in ipairs(APT.GROUPS_ORDER) do
-        ovMap[g] = APT.db.char.stats[g] and APT.db.char.stats[g].overall
-    end
-    local combinedOv = CombineGroups(ovMap)
-    AddOverallBanner(combinedOv)
-    if expandedSessions["overall"] then
-        AddTotalRow(combinedOv)
-    end
-    curY = curY + 4
-
-    -- ── Past sessions (newest first) ─────────────────────────
+    -- Sessions list
+    local filter = HasFilter() and selectedItems or nil
     for i, sess in ipairs(sessions) do
         local key      = SessionKey(sess, i)
-        local combined = CombineGroups(sess.stats or {})
+        local combined = CombineGroups(sess.stats or {}, filter)
         local dur      = sess.duration and FormatDuration(sess.duration)
         local dateStr  = sess.date or ""
         local dateLine = dur and (dateStr .. "  ·  " .. dur) or dateStr
@@ -351,7 +506,6 @@ function APT:CreateHistoryUI()
     local MakeFrameCloseButton = APT.MakeFrameCloseButton
     local MakeDivider          = APT.MakeDivider
     local MakeResizeGrip       = APT.MakeResizeGrip
-    local MakeCustomScrollbar  = APT.MakeCustomScrollbar
     local theme                = APT.theme
     local OR, GRN              = theme.OR, theme.GRN
 
@@ -380,11 +534,6 @@ function APT:CreateHistoryUI()
     for k, v in pairs(APT.db.char.expandedSessions or {}) do
         expandedSessions[k] = v
     end
-    -- Auto-expand overall on first ever open (nothing persisted)
-    if not next(expandedSessions) then
-        expandedSessions["overall"] = true
-        SaveExpandedState()
-    end
 
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function()
@@ -394,7 +543,6 @@ function APT:CreateHistoryUI()
                                    w=f:GetWidth(), h=f:GetHeight() }
     end)
 
-    -- Enforce minimum size during resize drag
     local _clamp = false
     f:SetScript("OnSizeChanged", function(self, w, h)
         if _clamp then return end
@@ -438,14 +586,221 @@ function APT:CreateHistoryUI()
     MakeColHead("Total", H_TOTAL)
     MakeColHead("Proc%", H_PCT)
 
-    MakeDivider(f, 8, -58, -24)
+    MakeDivider(f, 8, -58, -8)
     MakeFrameCloseButton(f)
 
-    -- Scroll frame (leaves right gutter for the custom scrollbar)
-    local SB_W = 6
+    -- ── Filter Panel ──────────────────────────────────────────
+    local fp = CreateFrame("Frame", nil, f)
+    fp:SetPoint("TOPLEFT",  f, "TOPLEFT",  8,   -HEADER_BOT)
+    fp:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -HEADER_BOT)
+    fp:SetHeight(FP_HDR_H)
+    f.filterPanel = fp
+
+    local fpBg = fp:CreateTexture(nil, "BACKGROUND")
+    fpBg:SetAllPoints(fp)
+    fpBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    fpBg:SetVertexColor(OR[1] * 0.06, OR[2] * 0.06, OR[3] * 0.06, 0.85)
+
+    -- Header clickable area
+    local fpHdr = CreateFrame("Button", nil, fp)
+    fpHdr:SetPoint("TOPLEFT",  fp, "TOPLEFT",  0, 0)
+    fpHdr:SetPoint("TOPRIGHT", fp, "TOPRIGHT", 0, 0)
+    fpHdr:SetHeight(FP_HDR_H)
+
+    local fpHdrHl = fpHdr:CreateTexture(nil, "BACKGROUND")
+    fpHdrHl:SetAllPoints(fpHdr)
+    fpHdrHl:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    fpHdrHl:SetVertexColor(0, 0, 0, 0)
+    fpHdr:SetScript("OnEnter", function() fpHdrHl:SetVertexColor(OR[1], OR[2], OR[3], 0.07) end)
+    fpHdr:SetScript("OnLeave", function() fpHdrHl:SetVertexColor(0, 0, 0, 0) end)
+    fpHdr:SetScript("OnClick", function()
+        filterExpanded = not filterExpanded
+        APT.RefreshHistory()
+    end)
+
+    local fpArrow = fp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fpArrow:SetPoint("LEFT", fpHdr, "LEFT", 6, 0)
+    fpArrow:SetWidth(14)
+    fpArrow:SetJustifyH("LEFT")
+    fpArrow:SetTextColor(OR[1], OR[2], OR[3])
+    fpArrow:SetText("▶")
+    fp.hdrArrow = fpArrow
+
+    local fpLabel = fp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fpLabel:SetPoint("LEFT", fpArrow, "RIGHT", 4, 0)
+    fpLabel:SetTextColor(0.82, 0.82, 0.82)
+    fpLabel:SetText("Filter by Item")
+    fp.hdrLabel = fpLabel
+
+    local fpCount = fp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fpCount:SetPoint("LEFT", fpLabel, "RIGHT", 8, 0)
+    fpCount:SetTextColor(0.50, 0.50, 0.50)
+    fpCount:SetText("")
+    fp.hdrCount = fpCount
+
+    -- Clear button
+    local fpClear = CreateFrame("Button", nil, fp)
+    fpClear:SetSize(52, 18)
+    fpClear:SetPoint("RIGHT", fpHdr, "RIGHT", -4, 0)
+    local fpClearBg = fpClear:CreateTexture(nil, "BACKGROUND")
+    fpClearBg:SetAllPoints(fpClear)
+    fpClearBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    fpClearBg:SetVertexColor(0.32, 0.07, 0.07, 0.90)
+    local fpClearLbl = fpClear:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fpClearLbl:SetAllPoints(fpClear)
+    fpClearLbl:SetText("Clear")
+    fpClearLbl:SetTextColor(1, 1, 1)
+    fpClear:SetScript("OnEnter", function() fpClearBg:SetVertexColor(0.60, 0.12, 0.12, 0.95) end)
+    fpClear:SetScript("OnLeave", function() fpClearBg:SetVertexColor(0.32, 0.07, 0.07, 0.90) end)
+    fpClear:SetScript("OnClick", ClearFilter)
+    fpClear:Hide()
+    fp.clearBtn = fpClear
+
+    -- Filter panel content (expanded area)
+    local fpContent = CreateFrame("Frame", nil, fp)
+    fpContent:SetPoint("TOPLEFT",  fp, "TOPLEFT",  4, -FP_HDR_H)
+    fpContent:SetPoint("TOPRIGHT", fp, "TOPRIGHT", -4, -FP_HDR_H)
+    fpContent:SetHeight(FP_CNT_H)
+    fpContent:Hide()
+    fp.content = fpContent
+
+    local fpSecLbl = fpContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fpSecLbl:SetPoint("TOPLEFT", fpContent, "TOPLEFT", 0, -2)
+    fpSecLbl:SetTextColor(0.42, 0.42, 0.42)
+    fpSecLbl:SetText("Top 5 Most Crafted")
+    fp.sectionLabel = fpSecLbl
+
+    -- 5 item filter buttons (88px each, 3px gap)
+    fp.itemBtns = {}
+    local BTN_W = 88
+    local BTN_H = 18
+    for i = 1, 5 do
+        local bx = (i - 1) * (BTN_W + 3)
+        local btn = CreateFrame("Button", nil, fpContent)
+        btn:SetSize(BTN_W, BTN_H)
+        btn:SetPoint("TOPLEFT", fpContent, "TOPLEFT", bx, -14)
+        btn:Hide()
+
+        local bbg = btn:CreateTexture(nil, "BACKGROUND")
+        bbg:SetAllPoints(btn)
+        bbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        bbg:SetVertexColor(0.10, 0.08, 0.04, 0.85)
+        btn.bg = bbg
+
+        -- Thin border lines on each button
+        local function MakeThin(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
+            local b = CreateFrame("Frame", nil, btn)
+            b:SetPoint(p1, btn, rp1, x1, y1)
+            b:SetPoint(p2, btn, rp2, x2, y2)
+            if isH then b:SetHeight(1) else b:SetWidth(1) end
+            local t = b:CreateTexture(nil, "ARTWORK")
+            t:SetAllPoints(b)
+            t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+            t:SetVertexColor(OR[1] * 0.4, OR[2] * 0.4, OR[3] * 0.4)
+        end
+        MakeThin("TOPLEFT",    "TOPLEFT",    0,  0, "TOPRIGHT",    "TOPRIGHT",    0,  0, true)
+        MakeThin("BOTTOMLEFT", "BOTTOMLEFT", 0,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0, true)
+        MakeThin("TOPLEFT",    "TOPLEFT",    0,  0, "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0, false)
+        MakeThin("TOPRIGHT",   "TOPRIGHT",  -1,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0, false)
+
+        local blbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        blbl:SetAllPoints(btn)
+        blbl:SetJustifyH("CENTER")
+        blbl:SetJustifyV("MIDDLE")
+        blbl:SetTextColor(0.65, 0.65, 0.65)
+        btn.lbl = blbl
+
+        btn:SetScript("OnEnter", function()
+            bbg:SetVertexColor(OR[1] * 0.20, OR[2] * 0.20, OR[3] * 0.20, 0.95)
+        end)
+        btn:SetScript("OnLeave", function()
+            if btn._name and selectedItems[btn._name] then
+                bbg:SetVertexColor(OR[1] * 0.28, OR[2] * 0.28, OR[3] * 0.28, 0.95)
+            else
+                bbg:SetVertexColor(0.10, 0.08, 0.04, 0.85)
+            end
+        end)
+        btn:SetScript("OnClick", function()
+            if btn._name then ToggleItem(btn._name) end
+        end)
+        fp.itemBtns[i] = btn
+    end
+
+    -- Search box
+    local searchBox = CreateFrame("EditBox", "APT_HistorySearch", fpContent, "InputBoxTemplate")
+    searchBox:SetPoint("TOPLEFT",  fpContent, "TOPLEFT",  0, -36)
+    searchBox:SetPoint("TOPRIGHT", fpContent, "TOPRIGHT", 0, -36)
+    searchBox:SetHeight(20)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(64)
+    searchBox:SetScript("OnTextChanged", function() APT.RefreshHistory() end)
+    searchBox:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+        APT.RefreshHistory()
+    end)
+    fp.searchBox = searchBox
+
+    -- ── Overall Stats Panel ────────────────────────────────────
+    -- Initial position (filter collapsed): HEADER_BOT + FP_HDR_H + 4
+    local spTop0 = HEADER_BOT + FP_HDR_H + 4
+
+    local sp = CreateFrame("Frame", nil, f)
+    sp:SetPoint("TOPLEFT",  f, "TOPLEFT",  8,   -spTop0)
+    sp:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -spTop0)
+    sp:SetHeight(SP_H)
+    f.statsPanel = sp
+
+    local spBg = sp:CreateTexture(nil, "BACKGROUND")
+    spBg:SetAllPoints(sp)
+    spBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    spBg:SetVertexColor(OR[1] * 0.14, OR[2] * 0.14, OR[3] * 0.14, 0.90)
+    DrawBorders(sp)
+
+    -- Orange left accent bar
+    local spAccent = sp:CreateTexture(nil, "ARTWORK")
+    spAccent:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    spAccent:SetVertexColor(OR[1], OR[2], OR[3])
+    spAccent:SetPoint("TOPLEFT",    sp, "TOPLEFT",    0, 0)
+    spAccent:SetPoint("BOTTOMLEFT", sp, "BOTTOMLEFT", 0, 0)
+    spAccent:SetWidth(3)
+
+    local spTitle = sp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    spTitle:SetPoint("LEFT", sp, "LEFT", 10, 0)
+    spTitle:SetTextColor(OR[1], OR[2], OR[3])
+    spTitle:SetText("Overall Stats")
+    sp.labelTitle = spTitle
+
+    local spBase = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    spBase:SetPoint("LEFT", sp, "LEFT", H_BASE - 20, 0)
+    spBase:SetWidth(H_COL_W + 20)
+    spBase:SetJustifyH("RIGHT")
+    spBase:SetTextColor(0.72, 0.72, 0.72)
+    spBase:SetText("Base: —")
+    sp.labelBase = spBase
+
+    local spTotal = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    spTotal:SetPoint("LEFT", sp, "LEFT", H_TOTAL - 20, 0)
+    spTotal:SetWidth(H_COL_W + 20)
+    spTotal:SetJustifyH("RIGHT")
+    spTotal:SetTextColor(0.72, 0.72, 0.72)
+    spTotal:SetText("Total: —")
+    sp.labelTotal = spTotal
+
+    local spProc = sp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    spProc:SetPoint("LEFT", sp, "LEFT", H_PCT - 20, 0)
+    spProc:SetWidth(H_COL_W + 20)
+    spProc:SetJustifyH("RIGHT")
+    spProc:SetTextColor(GRN[1], GRN[2], GRN[3])
+    spProc:SetText("Proc: —")
+    sp.labelProc = spProc
+
+    -- ── Scroll Frame ───────────────────────────────────────────
+    local sfTop0 = spTop0 + SP_H + 4
+
     local sf = CreateFrame("ScrollFrame", "APT_HistorySF", f)
-    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,          -62)
-    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(SB_W+8),    8)
+    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     8,           -sfTop0)
+    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -(SB_W + 10), 8)
     f.sf = sf
 
     local sc = CreateFrame("Frame", "APT_HistorySC", sf)
@@ -453,19 +808,91 @@ function APT:CreateHistoryUI()
     sf:SetScrollChild(sc)
     f.sc = sc
 
-    -- Custom scrollbar (themed, drag-to-scroll)
-    -- topOffset=62 matches the header height; botOffset=8 matches bottom padding
-    f.UpdateScrollbar = MakeCustomScrollbar(f, sf, sc, 62, 8)
+    -- ── Inline Scrollbar (anchored to f, repositioned with layout) ──
+    local sb = CreateFrame("Frame", nil, f)
+    sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -4, -sfTop0)
+    sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4,  8)
+    sb:SetWidth(SB_W)
+    f._sb = sb
 
-    -- Resize grip; also refreshes scrollbar after resize
+    local sbTrack = sb:CreateTexture(nil, "BACKGROUND")
+    sbTrack:SetAllPoints(sb)
+    sbTrack:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    sbTrack:SetVertexColor(0.12, 0.12, 0.12)
+
+    local thumb = CreateFrame("Button", nil, sb)
+    thumb:SetWidth(SB_W)
+    thumb:SetHeight(40)
+    thumb:SetPoint("TOPLEFT",  sb, "TOPLEFT",  0, 0)
+    thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, 0)
+
+    local thumbTex = thumb:CreateTexture(nil, "BACKGROUND")
+    thumbTex:SetAllPoints(thumb)
+    thumbTex:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 0.65)
+    thumb:SetScript("OnEnter", function() thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 1.00) end)
+    thumb:SetScript("OnLeave", function() thumbTex:SetVertexColor(OR[1], OR[2], OR[3], 0.65) end)
+
+    local function UpdateScrollbar()
+        local contentH    = sc:GetHeight()
+        local viewH       = sf:GetHeight()
+        local scrollRange = sf:GetVerticalScrollRange()
+        if contentH <= viewH or scrollRange == 0 then
+            thumb:Hide(); return
+        end
+        thumb:Show()
+        local trackH    = sb:GetHeight()
+        local thumbH    = math.max(20, trackH * (viewH / contentH))
+        local scrollPct = sf:GetVerticalScroll() / scrollRange
+        local offsetY   = (trackH - thumbH) * scrollPct
+        thumb:SetHeight(thumbH)
+        thumb:ClearAllPoints()
+        thumb:SetPoint("TOPLEFT",  sb, "TOPLEFT",  0, -offsetY)
+        thumb:SetPoint("TOPRIGHT", sb, "TOPRIGHT", 0, -offsetY)
+    end
+    f.UpdateScrollbar = UpdateScrollbar
+
+    sf:EnableMouseWheel(true)
+    sf:SetScript("OnMouseWheel", function(self, delta)
+        local cur = self:GetVerticalScroll()
+        local max = self:GetVerticalScrollRange()
+        self:SetVerticalScroll(math.max(0, math.min(max, cur - delta * 20)))
+        UpdateScrollbar()
+    end)
+
+    local dragStartY, dragStartScroll = 0, 0
+    thumb:RegisterForClicks("LeftButtonUp")
+    thumb:SetScript("OnMouseDown", function(_, btn)
+        if btn ~= "LeftButton" then return end
+        dragStartY      = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+        dragStartScroll = sf:GetVerticalScroll()
+        thumb:SetScript("OnUpdate", function()
+            local curY_   = select(2, GetCursorPosition()) / UIParent:GetEffectiveScale()
+            local delta   = dragStartY - curY_
+            local trackH  = sb:GetHeight()
+            local thumbH  = thumb:GetHeight()
+            local maxS    = sf:GetVerticalScrollRange()
+            if trackH > thumbH then
+                sf:SetVerticalScroll(math.max(0, math.min(maxS,
+                    dragStartScroll + delta * maxS / (trackH - thumbH))))
+                UpdateScrollbar()
+            end
+        end)
+    end)
+    thumb:SetScript("OnMouseUp", function()
+        thumb:SetScript("OnUpdate", nil)
+        UpdateScrollbar()
+    end)
+
+    -- ── Resize Grip ────────────────────────────────────────────
     MakeResizeGrip(f, function(frame)
         local point, _, relPoint, x, y = frame:GetPoint()
         APT.db.char.historyPos = { point=point, relPoint=relPoint, x=x, y=y,
                                    w=frame:GetWidth(), h=frame:GetHeight() }
-        if frame.UpdateScrollbar then frame.UpdateScrollbar() end
+        UpdateScrollbar()
     end)
 
-    -- ── Row pool ─────────────────────────────────────────────
+    -- ── Row Pool ───────────────────────────────────────────────
     f.rows = {}
     for i = 1, H_MAX_ROWS do
         local row = CreateFrame("Frame", nil, sc)
