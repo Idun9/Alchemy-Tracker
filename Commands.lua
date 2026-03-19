@@ -79,10 +79,6 @@ function APT.InjectTestData()
     if APT.RefreshHistory        then APT.RefreshHistory()        end
 end
 
--- Two-step confirmation state for /apt reset all
-local _resetAllPending = false
-local _resetAllTimer   = nil
-
 -- ============================================================
 -- Minimap Right-Click Dropdown
 -- ============================================================
@@ -234,19 +230,7 @@ function APT:HandleSlashCommand(input)
         APT.ResetSessionStats()
 
     elseif cmdLower == "reset all" then
-        if _resetAllPending then
-            _resetAllPending = false
-            if _resetAllTimer then _resetAllTimer:Cancel(); _resetAllTimer = nil end
-            APT.ResetAllStats()
-        else
-            _resetAllPending = true
-            self:Print("|cffff4444WARNING:|r Wipes ALL stats. Type |cffffd700/apt reset all|r again within 10 sec to confirm.")
-            _resetAllTimer = C_Timer.NewTimer(10, function()
-                _resetAllPending = false
-                _resetAllTimer   = nil
-                APT:Print("Reset cancelled (timed out).")
-            end)
-        end
+        APT.ResetAllStats()
 
     elseif cmdLower == "history" then
         if APT.historyFrame then

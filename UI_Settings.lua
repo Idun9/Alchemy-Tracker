@@ -290,8 +290,9 @@ function APT:CreateSettingsUI()
         return btn
     end
 
-    MakeConfirmBtn("Reset Session Stats", S_PAD,            APT.ResetSessionStats)
-    MakeConfirmBtn("Reset All Stats",     S_PAD + btnW + 8, APT.ResetAllStats)
+    MakeBtn(f, "Reset Session Stats", btnW, 20, APT.ResetSessionStats)
+        :SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
+    MakeConfirmBtn("Reset All Stats", S_PAD + btnW + 8, APT.ResetAllStats)
     curY = curY - 28
 
     -- ── Interface ─────────────────────────────────────────────────
