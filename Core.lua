@@ -533,10 +533,7 @@ function APT:OnInitialize()
 end
 
 function APT:OnEnable()
-    local detected = DetectAlchemySpecialization()
-    if not detected then
-        self:Print("|cffff8800No alchemy mastery detected.|r Tracking is disabled until a mastery specialization is found. Use |cffffd700/apt spec|r to check.")
-    end
+    DetectAlchemySpecialization()
 
     self:RegisterEvent("PLAYER_LOGIN",        "OnPlayerLogin")
     self:RegisterEvent("TRADE_SKILL_SHOW",    "OnTradeSkillShow")
@@ -545,7 +542,6 @@ function APT:OnEnable()
     self:RegisterEvent("CHAT_MSG_LOOT",       "OnChatMessage")
     self:RegisterEvent("TRADE_SKILL_CLOSE",   "OnTradeSkillClose")
 
-    self:Print("Loaded. Type /apt for help.")
 end
 
 -- ============================================================

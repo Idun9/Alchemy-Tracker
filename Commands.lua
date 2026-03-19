@@ -195,10 +195,19 @@ function APT:HandleSlashCommand(input)
     local cmd      = input:match("^%s*(.-)%s*$")
     local cmdLower = cmd:lower()
 
-    if cmdLower == "" or cmdLower == "help" then
+    if cmdLower == "" then
         local _meta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
         local ver   = (_meta and _meta(APT.ADDON_NAME, "Version")) or "?"
-        self:Print(string.format("v%s  |cffffd700/apt|r show · hide · history · reset · reset all · spec · export · resetpos · debug · testdata", ver))
+        self:Print(string.format("Alchemy Tracker v%s — type |cffffd700/apt commands|r for a list of commands.", ver))
+
+    elseif cmdLower == "commands" then
+        self:Print("|cffffd700/apt show|r        — open the stats window")
+        self:Print("|cffffd700/apt hide|r        — close the stats window")
+        self:Print("|cffffd700/apt history|r     — open session history")
+        self:Print("|cffffd700/apt reset|r       — reset session stats")
+        self:Print("|cffffd700/apt reset all|r   — reset all stats including overall")
+        self:Print("|cffffd700/apt resetpos|r    — reset window positions")
+        self:Print("|cffffd700/apt debug|r       — toggle debug mode")
 
     elseif cmdLower == "resetpos" then
         APT.db.char.windowPos  = false
@@ -243,41 +252,6 @@ function APT:HandleSlashCommand(input)
         if APT.historyFrame then
             APT.historyFrame:Show()
             APT.RefreshHistory()
-        end
-
-    elseif cmdLower == "spec" then
-        local spec = APT.db.char.specialization
-        if spec.current == "None" then
-            self:Print("|cffff8800No mastery detected.|r Open the tradeskill window then type |cffffd700/apt spec|r to retry.")
-        else
-            self:Print(string.format("Detected specialization: |cff00ff00%s Mastery|r", spec.current))
-        end
-
-    elseif cmdLower == "testdata" then
-        APT.InjectTestData()
-        self:Print("Test data injected — 5 sessions, 10 items. Windows opened side by side.")
-
-    elseif cmdLower == "export" then
-        local sess = APT.CombineAllStats("session")
-        if sess.totalCrafts == 0 then
-            self:Print("No crafts this session to export.")
-        else
-            local spec    = APT.db.char.specialization.current
-            local specStr = spec ~= "None" and (spec .. " Master") or "No Mastery"
-            local procPct = sess.totalCrafts > 0
-                and (sess.totalExtra / sess.totalCrafts * 100) or 0
-            local msg = string.format(
-                "[AlchemyTracker] %s | %d crafts | %d items | x2:%d x3:%d x4:%d x5+:%d | %.1f%% proc rate",
-                specStr, sess.totalCrafts, sess.totalPotions,
-                sess.procs1, sess.procs2, sess.procs3, sess.procs4, procPct)
-            -- Pre-fill the chat input box so the player can post or copy
-            if ChatFrame1EditBox then
-                ChatFrame1EditBox:Show()
-                ChatFrame1EditBox:SetText(msg)
-                ChatFrame1EditBox:SetFocus()
-            else
-                self:Print(msg)
-            end
         end
 
     else
