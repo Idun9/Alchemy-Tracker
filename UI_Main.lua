@@ -27,33 +27,29 @@ APT.RefreshUI = function()
     local sess   = APT.CombineAllStats("session")
     local tc     = sess.totalCrafts
 
-    local visible = tc > 0
-
-    local noProc = tc - sess.procs1 - sess.procs2 - sess.procs3 - sess.procs4
-
     local tiers = {
-        { key = "BASE", count = noProc      },
-        { key = "X2",   count = sess.procs1 },
-        { key = "X3",   count = sess.procs2 },
-        { key = "X4",   count = sess.procs3 },
-        { key = "X5",   count = sess.procs4 },
+        { key = "BASE", count = tc           },  -- all craft attempts
+        { key = "X2",   count = sess.procs1  },
+        { key = "X3",   count = sess.procs2  },
+        { key = "X4",   count = sess.procs3  },
+        { key = "X5",   count = sess.procs4  },
     }
     for _, t in ipairs(tiers) do
         if Lines[t.key] then
-            Lines[t.key]:SetText(visible and tostring(t.count) or "")
+            Lines[t.key]:SetText(tostring(t.count))
         end
     end
 
     if Lines["TOTAL_CRAFTS"] then
-        Lines["TOTAL_CRAFTS"]:SetText(visible and tostring(tc) or "")
+        -- Total items produced: each craft attempt counts as 1, plus any extra from procs
+        Lines["TOTAL_CRAFTS"]:SetText(tostring(tc + sess.totalExtra))
     end
 
     if Lines["PCT_GAIN"] then
-        local totalItems = sess.totalPotions
-        if visible and totalItems > 0 then
-            Lines["PCT_GAIN"]:SetText(string.format("%.1f%%", sess.totalExtra / totalItems * 100))
+        if tc > 0 then
+            Lines["PCT_GAIN"]:SetText(string.format("%.1f%%", sess.totalExtra / tc * 100))
         else
-            Lines["PCT_GAIN"]:SetText(visible and "0.0%" or "")
+            Lines["PCT_GAIN"]:SetText("0.0%")
         end
     end
 end

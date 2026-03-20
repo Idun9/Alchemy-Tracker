@@ -100,6 +100,7 @@ local defaults = {
         historyPos       = false,
         expandedSessions = {},    -- persisted expand state for the history browser
         sessionStartTime = false,
+        debugMode        = false,
         settings = {
             craftWindow      = DEFAULT_CRAFT_WINDOW,
             sessionTimeout   = DEFAULT_SESSION_TIMEOUT,
@@ -262,12 +263,16 @@ local function FmtToPattern(fmt)
     return "^" .. table.concat(result) .. "$"
 end
 
-local PAT_CREATE_SINGLE = FmtToPattern(LOOT_ITEM_CREATED_SELF          or "You create: %s.")
-local PAT_CREATE_MULTI  = FmtToPattern(LOOT_ITEM_CREATED_SELF_MULTIPLE or "You create %dx %s.")
+-- Trailing period is optional: some server variants omit it.
+-- FmtToPattern produces "^...%.$"; sub(1,-4) strips the trailing "%.$" so we can
+-- reattach it as "%.?$".
+local PAT_CREATE_SINGLE = FmtToPattern(LOOT_ITEM_CREATED_SELF          or "You create: %s."):sub(1,-4) .. "%.?$"
+local PAT_CREATE_MULTI  = FmtToPattern(LOOT_ITEM_CREATED_SELF_MULTIPLE or "You create %dx %s."):sub(1,-4) .. "%.?$"
 
 -- Server-specific proc-result format: "You create: <link> x<n>" (no trailing period).
 -- Fires alongside the base craft message to indicate total items produced (base + extras).
-local PAT_CREATE_PROC_RESULT = "^You create: (.+) x(%d+)%.?$"
+-- Space before "x<n>" is optional: some servers emit "|r x3" (space) and others "|rx3" (no space).
+local PAT_CREATE_PROC_RESULT = "^You create: (.+) ?x(%d+)%.?$"
 
 local PAT_LOOT_SINGLE   = FmtToPattern(LOOT_ITEM_PUSHED_SELF          or "You receive loot: %s.")
 local PAT_LOOT_MULTI    = FmtToPattern(LOOT_ITEM_PUSHED_SELF_MULTIPLE or "You receive loot: %dx%s.")
@@ -324,6 +329,24 @@ end
 local function HandleCraftEvent(msg)
     if APT.db.char.specialization.current == "None" then return end
 
+    -- Check proc-result format ("You create: <link> x<n>") BEFORE ParseCreateMessage.
+    -- PAT_CREATE_SINGLE is greedy and would otherwise swallow the "x<n>" suffix,
+    -- returning amount=1 and causing FinalizeCraft to record a false base craft.
+    local procTotal, procLink = ParseProcResultMessage(msg)
+    if procTotal and procLink then
+        if craftState == CRAFT_STATE.ACCUMULATING and currentCraft then
+            local itemID = ParseItemIDFromLink(procLink)
+            if itemID and itemID == currentCraft.itemID then
+                local extra = procTotal - currentCraft.totalCreated
+                if extra > 0 then
+                    currentCraft.totalCreated = currentCraft.totalCreated + extra
+                    ScheduleCraftFinalize()
+                end
+            end
+        end
+        return
+    end
+
     local amount, link = ParseCreateMessage(msg)
     if not amount then return end
 
@@ -337,7 +360,28 @@ local function HandleCraftEvent(msg)
     local canProc = (spec.isElixir    and (group == "FLASK" or group == "ELIXIR"))
                  or (spec.isPotion    and  group == "POTION")
                  or (spec.isTransmute and  group == "TRANSMUTE")
-    if not canProc then return end
+    if not canProc then
+        if APT.debugMode then
+            APT:Print(string.format("|cffaaaaaa[DEBUG] craft SKIPPED canProc=false group=%s spec=%s|r",
+                tostring(group), APT.db.char.specialization.current))
+        end
+        return
+    end
+
+    -- If a proc result for this same item already arrived first and started accumulation,
+    -- this base message is its companion — don't reset the craft, just keep the timer running.
+    if craftState == CRAFT_STATE.ACCUMULATING and currentCraft
+    and currentCraft.itemID == itemID and currentCraft.totalCreated >= amount then
+        if APT.debugMode then
+            APT:Print(string.format("|cffaaaaaa[DEBUG] craft BASE companion (proc-first), ignoring reset itemID=%d|r", itemID))
+        end
+        ScheduleCraftFinalize()
+        return
+    end
+
+    if APT.debugMode then
+        APT:Print(string.format("|cffaaaaaa[DEBUG] craft START itemID=%d amount=%d|r", itemID, amount))
+    end
 
     -- Finalize any previous craft unconditionally — each "You create:" is a new craft.
     CancelCraftTimer()
@@ -456,6 +500,8 @@ APT.CombineAllStats = CombineAllStats
 function APT:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("AlchemyProcTrackerDB", defaults, true)
 
+    APT.debugMode = self.db.char.debugMode or false
+
     -- Back-compat: chars without sessions from the default table
     if not self.db.char.sessions then self.db.char.sessions = {} end
 
@@ -545,15 +591,42 @@ function APT:OnChatMessage(event, msg)
         -- (no trailing period on some servers) would otherwise swallow the xN suffix.
         local procTotal, procLink = ParseProcResultMessage(msg)
         if procTotal and procLink then
-            if tradeSkillOpen
-            and craftState == CRAFT_STATE.ACCUMULATING
-            and currentCraft then
+            if APT.debugMode then
+                APT:Print(string.format("|cffaaaaaa[DEBUG] proc-result matched: total=%d state=%s hasCraft=%s|r",
+                    procTotal, craftState, tostring(currentCraft ~= nil)))
+            end
+            if craftState == CRAFT_STATE.ACCUMULATING and currentCraft then
+                -- Proc arrived after base message: update the running total.
                 local itemID = ParseItemIDFromLink(procLink)
+                if APT.debugMode then
+                    APT:Print(string.format("|cffaaaaaa[DEBUG] proc itemID=%s currentID=%s|r",
+                        tostring(itemID), tostring(currentCraft and currentCraft.itemID)))
+                end
                 if itemID and itemID == currentCraft.itemID then
                     local extra = procTotal - currentCraft.totalCreated
                     if extra > 0 then
                         currentCraft.totalCreated = currentCraft.totalCreated + extra
                         ScheduleCraftFinalize()
+                    end
+                end
+            elseif craftState == CRAFT_STATE.IDLE then
+                -- Proc arrived BEFORE base message: start the craft now with the full count.
+                local itemID = ParseItemIDFromLink(procLink)
+                if itemID then
+                    local group, itemName = GetTrackedGroupForItem(itemID)
+                    if group then
+                        local spec = APT.db.char.specialization
+                        local canProc = (spec.isElixir    and (group == "FLASK" or group == "ELIXIR"))
+                                     or (spec.isPotion    and  group == "POTION")
+                                     or (spec.isTransmute and  group == "TRANSMUTE")
+                        if canProc then
+                            if APT.debugMode then
+                                APT:Print(string.format("|cffaaaaaa[DEBUG] proc-first: starting craft itemID=%d total=%d|r", itemID, procTotal))
+                            end
+                            craftState   = CRAFT_STATE.ACCUMULATING
+                            currentCraft = { itemID=itemID, itemName=itemName, group=group, totalCreated=procTotal }
+                            ScheduleCraftFinalize()
+                        end
                     end
                 end
             end
@@ -563,12 +636,14 @@ function APT:OnChatMessage(event, msg)
         -- Some servers/versions send "You create:" messages as CHAT_MSG_LOOT instead
         -- of CHAT_MSG_SKILL — detect and handle them as craft events.
         if ParseCreateMessage(msg) then
+            if APT.debugMode then
+                APT:Print("|cffaaaaaa[DEBUG] LOOT routed to HandleCraftEvent|r")
+            end
             HandleCraftEvent(msg)
             return
         end
 
         if APT.db.char.specialization.current == "None" then return end
-        if not tradeSkillOpen then return end
         if craftState ~= CRAFT_STATE.ACCUMULATING or not currentCraft then return end
 
         local amount, link = ParseLootMessage(msg)
@@ -585,8 +660,9 @@ end
 
 function APT:OnTradeSkillClose()
     tradeSkillOpen = false
-    CancelCraftTimer()
-    FinalizeCraft()
+    -- Do not cancel the craft timer here: a proc message may still arrive within
+    -- the accumulation window after the tradeskill window closes.  The timer will
+    -- fire on its own and call FinalizeCraft once the window has passed.
 
     -- Start inactivity timer; fires sessionClosed after timeout
     if sessionTimer then sessionTimer:Cancel() end

@@ -59,20 +59,13 @@ function APT.InjectTestData()
             procs1=lte, procs2=0, procs3=0, procs4=0, items=litems }
     end
 
-    -- Open both windows side by side
-    APT.db.char.windowPos  = false
-    APT.db.char.historyPos = false
+    -- Open the stats window only
+    APT.db.char.windowPos = false
     if APT.frame then
         APT.frame:SetSize(APT.frame._defW or 300, APT.frame._defH or 217)
         APT.frame:ClearAllPoints()
         APT.frame:SetPoint("TOPRIGHT", UIParent, "CENTER", -10, 200)
         APT.frame:Show()
-    end
-    if APT.historyFrame then
-        APT.historyFrame:SetSize(APT.historyFrame._defW or 500, APT.historyFrame._defH or 440)
-        APT.historyFrame:ClearAllPoints()
-        APT.historyFrame:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
-        APT.historyFrame:Show()
     end
     if APT.InvalidateStatsCache then APT.InvalidateStatsCache() end
     if APT.RefreshUI             then APT.RefreshUI()             end
@@ -211,6 +204,7 @@ function APT:HandleSlashCommand(input)
 
     elseif cmdLower == "debug" then
         APT.debugMode = not APT.debugMode
+        APT.db.char.debugMode = APT.debugMode
         self:Print("Debug mode: " .. (APT.debugMode and "|cff00ff00ON|r" or "|cffff4444OFF|r"))
 
     elseif cmdLower == "resetpos" then
