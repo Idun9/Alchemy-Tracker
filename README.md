@@ -67,6 +67,8 @@ Any printed line indicates a wrong item ID.
 
 ## Acknowledgements
 
+The primary inspiration for this addon is **[Licious Potion Proc Tracker](https://wago.io/7LY2pSlqr)** — thank you for the idea.
+
 This addon is built on top of several open-source libraries from the WoW addon community:
 
 - **[Ace3](https://www.wowace.com/projects/ace3)** — addon framework by the Ace3 Development Team. Provides the addon lifecycle (`AceAddon-3.0`), slash command handling (`AceConsole-3.0`), event management (`AceEvent-3.0`), and saved variables (`AceDB-3.0`).
