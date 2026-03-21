@@ -111,6 +111,7 @@ local defaults = {
                 enabled   = false,
                 matCost   = 0,    -- stored in copper
                 sellPrice = 0,    -- stored in copper
+                ahFee     = true, -- deduct 5% AH cut from revenue
             },
         },
     },

@@ -9,9 +9,10 @@
 
 local APT = AlchemyTracker
 
-local PANEL_H = 148   -- pixel height of the estimator section
-local M_PAD   = 12
-local M_ROW_H = 18
+local PANEL_H  = 166   -- pixel height of the estimator section
+local M_PAD    = 12
+local M_ROW_H  = 18
+local AH_FEE   = 0.05  -- 5% Auction House cut (TBC Classic standard)
 
 -- ============================================================
 -- Auction addon price lookup — returns copper or nil.
@@ -77,13 +78,17 @@ APT.RefreshPriceEstimator = function()
 
     local matCost   = settings.matCost   or 0
     local sellPrice = settings.sellPrice or 0
+    local useAHFee  = settings.ahFee ~= false   -- default true
+
+    -- Effective sell price after AH cut
+    local effectiveSell = useAHFee and (sellPrice * (1 - AH_FEE)) or sellPrice
 
     -- Avg yield per craft attempt (1.0 when no data yet)
     local avgYield = tc > 0 and (sess.totalPotions / tc) or 1.0
     PE.avgYield:SetText(string.format("%.2fx", avgYield))
 
-    -- Revenue per craft
-    local revPerCraft = avgYield * sellPrice
+    -- Revenue per craft (after AH fee)
+    local revPerCraft = avgYield * effectiveSell
     PE.revPerCraft:SetText(FormatGold(revPerCraft))
 
     -- Profit per craft
@@ -92,8 +97,8 @@ APT.RefreshPriceEstimator = function()
     PE.profitPerCraft:SetText(FormatGold(profitPerCraft))
     PE.profitPerCraft:SetTextColor(unpack(pc))
 
-    -- Session profit  (total items sold minus total mat cost)
-    local sessProfit = sess.totalPotions * sellPrice - tc * matCost
+    -- Session profit
+    local sessProfit = sess.totalPotions * effectiveSell - tc * matCost
     local sc = sessProfit >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
     PE.sessProfit:SetText(FormatGold(sessProfit))
     PE.sessProfit:SetTextColor(unpack(sc))
@@ -122,10 +127,9 @@ end
 -- Called once from CreateUI after the main frame is built.
 -- ============================================================
 function APT.CreatePriceEstimatorPanel(parentFrame)
-    local f          = parentFrame
+    local f           = parentFrame
     local MakeDivider = APT.MakeDivider
-    local OR         = APT.theme.OR
-    local GRN        = APT.theme.GRN
+    local OR          = APT.theme.OR
 
     -- Sub-frame pinned to the bottom of the parent (sits above the resize grip)
     local panel = CreateFrame("Frame", nil, f)
@@ -193,7 +197,24 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
     PE.matCostBox   = MakeInputRow("Mat cost / craft:",  "matCost",   curY)
     curY = curY - M_ROW_H
     PE.sellPriceBox = MakeInputRow("Sell price / item:", "sellPrice", curY)
-    curY = curY - 8
+    curY = curY - 6
+
+    -- AH Fee checkbox row
+    local ahLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ahLbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, curY)
+    ahLbl:SetText("AH Fee (5%):")
+    ahLbl:SetTextColor(0.76, 0.76, 0.76)
+
+    local chk = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    chk:SetSize(20, 20)
+    chk:SetPoint("RIGHT", panel, "RIGHT", -M_PAD - 2, curY + M_ROW_H / 2 - 3)
+    chk:SetChecked(APT.db.char.settings.priceEstimator.ahFee ~= false)
+    chk:SetScript("OnClick", function(self)
+        APT.db.char.settings.priceEstimator.ahFee = self:GetChecked()
+        APT.RefreshPriceEstimator()
+    end)
+    PE.ahFeeChk = chk
+    curY = curY - M_ROW_H - 2
 
     MakeDivider(panel, M_PAD, curY, -M_PAD)
     curY = curY - 10
@@ -212,10 +233,10 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
         return val
     end
 
-    PE.avgYield      = MakeCalcRow("Avg yield / craft:", curY) ; curY = curY - M_ROW_H
-    PE.revPerCraft   = MakeCalcRow("Revenue / craft:",   curY) ; curY = curY - M_ROW_H
-    PE.profitPerCraft = MakeCalcRow("Profit / craft:",   curY) ; curY = curY - M_ROW_H
-    PE.sessProfit    = MakeCalcRow("Session profit:",    curY)
+    PE.avgYield       = MakeCalcRow("Avg yield / craft:", curY) ; curY = curY - M_ROW_H
+    PE.revPerCraft    = MakeCalcRow("Revenue / craft:",   curY) ; curY = curY - M_ROW_H
+    PE.profitPerCraft = MakeCalcRow("Profit / craft:",    curY) ; curY = curY - M_ROW_H
+    PE.sessProfit     = MakeCalcRow("Session profit:",    curY)
 
     -- Restore persisted state
     if APT.db.char.settings.priceEstimator.enabled then
