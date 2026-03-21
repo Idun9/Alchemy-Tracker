@@ -22,6 +22,7 @@ AlchemyTrackerItems.lua
 Core.lua
 UI_Shared.lua
 UI_Main.lua
+UI_PriceEstimator.lua
 UI_History.lua
 UI_Settings.lua
 Commands.lua

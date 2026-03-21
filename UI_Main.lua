@@ -52,6 +52,8 @@ APT.RefreshUI = function()
             Lines["PCT_GAIN"]:SetText("0.0%")
         end
     end
+
+    if APT.RefreshPriceEstimator then APT.RefreshPriceEstimator() end
 end
 
 -- ============================================================
@@ -129,6 +131,24 @@ function APT:CreateUI()
     hdrBg:SetVertexColor(0.04, 0.04, 0.04)
 
     MakeFrameCloseButton(f)
+
+    -- Price estimator toggle button (left of close button)
+    local priceBtn = CreateFrame("Button", nil, f)
+    priceBtn:SetSize(18, 18)
+    priceBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -30, -6)
+    local pBg = priceBtn:CreateTexture(nil, "BACKGROUND")
+    pBg:SetAllPoints(priceBtn)
+    pBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    pBg:SetVertexColor(0.10, 0.40, 0.10)
+    local pTxt = priceBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pTxt:SetAllPoints(priceBtn)
+    pTxt:SetText("$")
+    pTxt:SetTextColor(1, 1, 1)
+    priceBtn:SetScript("OnEnter", function() pBg:SetVertexColor(0.20, 0.65, 0.20) end)
+    priceBtn:SetScript("OnLeave", function() pBg:SetVertexColor(0.10, 0.40, 0.10) end)
+    priceBtn:SetScript("OnClick", function()
+        if APT.TogglePriceEstimator then APT.TogglePriceEstimator() end
+    end)
 
     local curY = -7
 
@@ -214,4 +234,6 @@ function APT:CreateUI()
     MakeResizeGrip(f, function(frame)
         APT.SaveWindowPos(frame, "windowPos")
     end)
+
+    if APT.CreatePriceEstimatorPanel then APT.CreatePriceEstimatorPanel(f) end
 end

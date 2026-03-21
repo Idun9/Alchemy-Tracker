@@ -107,6 +107,11 @@ local defaults = {
             maxSessions      = DEFAULT_MAX_SESSIONS,
             maxItemsPerGroup = DEFAULT_MAX_ITEMS_PER_GROUP,
             showBestFlask    = true,
+            priceEstimator   = {
+                enabled   = false,
+                matCost   = 0,    -- stored in copper
+                sellPrice = 0,    -- stored in copper
+            },
         },
     },
 }
@@ -215,11 +220,6 @@ local function FinalizeCraft()
 
     local totalCreated = currentCraft.totalCreated
     local extra        = totalCreated - 1
-
-    if extra > 0 then
-        APT:Print(string.format("|cff00ff00Proc!|r %s: crafted %d (+%d extra).",
-            currentCraft.itemName, totalCreated, extra))
-    end
 
     UpdateStats(groupStats, totalCreated, currentCraft.itemID, currentCraft.itemName)
     currentCraft = nil
