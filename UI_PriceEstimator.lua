@@ -2,6 +2,12 @@
 -- Collapsible price estimator panel attached to the main stats window.
 -- Toggled by the "$" button in the header.
 --
+-- Cost model:
+--   The user inputs the total lot price and how many crafts that lot covers.
+--   Cost / craft = lotPrice / lotSize.
+--   Profit / craft = (avgYield × sellPrice × (1 – AH_FEE)) – costPerCraft
+--   Session profit  = (totalPotions × effectiveSell) – (totalCrafts × costPerCraft)
+--
 -- Auction addon integration (future):
 --   The GetAuctionPrice() function checks for TSM, Auctionator, and Auctioneer
 --   in priority order before falling back to manual input.  To activate an
@@ -9,7 +15,7 @@
 
 local APT = AlchemyTracker
 
-local PANEL_H  = 166   -- pixel height of the estimator section
+local PANEL_H  = 202   -- pixel height of the estimator section (10 rows)
 local M_PAD    = 12
 local M_ROW_H  = 18
 local AH_FEE   = 0.05  -- 5% Auction House cut (TBC Classic standard)
@@ -61,6 +67,14 @@ local function ParseGoldInput(text)
     return math.floor(g * 10000 + 0.5)
 end
 
+local function ParseIntInput(text)
+    if not text then return nil end
+    local clean = text:match("^%s*(.-)%s*$")
+    local n = tonumber(clean)
+    if not n or n < 1 then return nil end
+    return math.floor(n + 0.5)
+end
+
 -- ============================================================
 -- Panel widget references
 -- ============================================================
@@ -76,9 +90,14 @@ APT.RefreshPriceEstimator = function()
     local tc       = sess.totalCrafts
     local settings = APT.db.char.settings.priceEstimator
 
-    local matCost   = settings.matCost   or 0
+    local lotPrice  = settings.lotPrice  or 0
+    local lotSize   = math.max(settings.lotSize or 1, 1)
     local sellPrice = settings.sellPrice or 0
     local useAHFee  = settings.ahFee ~= false   -- default true
+
+    -- Cost per individual craft attempt
+    local costPerCraft = lotPrice / lotSize
+    PE.costPerCraft:SetText(FormatGold(costPerCraft))
 
     -- Effective sell price after AH cut
     local effectiveSell = useAHFee and (sellPrice * (1 - AH_FEE)) or sellPrice
@@ -92,13 +111,13 @@ APT.RefreshPriceEstimator = function()
     PE.revPerCraft:SetText(FormatGold(revPerCraft))
 
     -- Profit per craft
-    local profitPerCraft = revPerCraft - matCost
+    local profitPerCraft = revPerCraft - costPerCraft
     local pc = profitPerCraft >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
     PE.profitPerCraft:SetText(FormatGold(profitPerCraft))
     PE.profitPerCraft:SetTextColor(unpack(pc))
 
-    -- Session profit
-    local sessProfit = sess.totalPotions * effectiveSell - tc * matCost
+    -- Session profit: (total items × effectiveSell) – (total crafts × costPerCraft)
+    local sessProfit = sess.totalPotions * effectiveSell - tc * costPerCraft
     local sc = sessProfit >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
     PE.sessProfit:SetText(FormatGold(sessProfit))
     PE.sessProfit:SetTextColor(unpack(sc))
@@ -151,8 +170,8 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
     titleLbl:SetTextColor(OR[1], OR[2], OR[3])
     curY = curY - M_ROW_H
 
-    -- Input row factory
-    local function MakeInputRow(label, dbKey, y)
+    -- Gold input row factory
+    local function MakeGoldRow(label, dbKey, y)
         local lbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, y)
         lbl:SetText(label)
@@ -194,9 +213,48 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
         return box
     end
 
-    PE.matCostBox   = MakeInputRow("Mat cost / craft:",  "matCost",   curY)
-    curY = curY - M_ROW_H
-    PE.sellPriceBox = MakeInputRow("Sell price / item:", "sellPrice", curY)
+    -- Integer input row factory (for "Crafts / lot")
+    local function MakeIntRow(label, dbKey, y)
+        local lbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, y)
+        lbl:SetText(label)
+        lbl:SetTextColor(0.76, 0.76, 0.76)
+
+        local box = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+        box:SetSize(78, 18)
+        box:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD - 14, y + 1)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(6)
+        box:SetNumeric(true)
+
+        local saved = APT.db.char.settings.priceEstimator[dbKey] or 1
+        box:SetText(tostring(math.max(1, math.floor(saved + 0.5))))
+
+        local function Commit()
+            local n = ParseIntInput(box:GetText())
+            if n then
+                APT.db.char.settings.priceEstimator[dbKey] = n
+                box:SetText(tostring(n))
+                APT.RefreshPriceEstimator()
+            else
+                local s = APT.db.char.settings.priceEstimator[dbKey] or 1
+                box:SetText(tostring(math.max(1, math.floor(s + 0.5))))
+            end
+            box:ClearFocus()
+        end
+        box:SetScript("OnEnterPressed", Commit)
+        box:SetScript("OnEscapePressed", function(self)
+            local s = APT.db.char.settings.priceEstimator[dbKey] or 1
+            self:SetText(tostring(math.max(1, math.floor(s + 0.5))))
+            self:ClearFocus()
+        end)
+
+        return box
+    end
+
+    PE.lotPriceBox  = MakeGoldRow("Lot price:",       "lotPrice",  curY) ; curY = curY - M_ROW_H
+    PE.lotSizeBox   = MakeIntRow( "Crafts / lot:",    "lotSize",   curY) ; curY = curY - M_ROW_H
+    PE.sellPriceBox = MakeGoldRow("Sell price / item:","sellPrice", curY)
     curY = curY - 6
 
     -- AH Fee checkbox row
@@ -233,6 +291,7 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
         return val
     end
 
+    PE.costPerCraft   = MakeCalcRow("Cost / craft:",     curY) ; curY = curY - M_ROW_H
     PE.avgYield       = MakeCalcRow("Avg yield / craft:", curY) ; curY = curY - M_ROW_H
     PE.revPerCraft    = MakeCalcRow("Revenue / craft:",   curY) ; curY = curY - M_ROW_H
     PE.profitPerCraft = MakeCalcRow("Profit / craft:",    curY) ; curY = curY - M_ROW_H

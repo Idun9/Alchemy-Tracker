@@ -109,8 +109,9 @@ local defaults = {
             showBestFlask    = true,
             priceEstimator   = {
                 enabled   = false,
-                matCost   = 0,    -- stored in copper
-                sellPrice = 0,    -- stored in copper
+                lotPrice  = 0,    -- total material cost for one lot, in copper
+                lotSize   = 1,    -- number of craft attempts covered by that lot
+                sellPrice = 0,    -- sell price per item, in copper
                 ahFee     = true, -- deduct 5% AH cut from revenue
             },
         },
@@ -413,11 +414,18 @@ local function SaveCurrentSession()
 
     APT.db.char.nextSessionID = (APT.db.char.nextSessionID or 0) + 1
     local startTime = APT.db.char.sessionStartTime
+    local pe = APT.db.char.settings.priceEstimator
     local snapshot = {
         date     = date("%Y-%m-%d %H:%M"),
         id       = APT.db.char.nextSessionID,
         duration = startTime and math.max(0, time() - startTime) or nil,
         stats    = {},
+        priceSettings = {
+            lotPrice  = pe.lotPrice  or 0,
+            lotSize   = pe.lotSize   or 1,
+            sellPrice = pe.sellPrice or 0,
+            ahFee     = pe.ahFee ~= false,
+        },
     }
     for _, group in ipairs(GROUPS_ORDER) do
         local s  = APT.db.char.stats[group].session
