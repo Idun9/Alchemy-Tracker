@@ -211,6 +211,8 @@ local function UpdateStats(groupStats, totalCreated, itemID, itemName)
     _sessionStatsCache = nil
 end
 
+local RestartSessionTimer   -- forward declaration (defined below FinalizeCraft)
+
 local function FinalizeCraft()
     if craftState ~= CRAFT_STATE.ACCUMULATING then return end
     craftState = CRAFT_STATE.IDLE
@@ -317,7 +319,7 @@ local function CancelCraftTimer()
     if craftTimer then craftTimer:Cancel(); craftTimer = nil end
 end
 
-local function RestartSessionTimer()
+RestartSessionTimer = function()
     if sessionTimer then sessionTimer:Cancel() end
     sessionTimer = C_Timer.NewTimer(SessionTimeout(), function()
         sessionTimer  = nil
