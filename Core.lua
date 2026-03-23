@@ -18,7 +18,7 @@ local POTION_MASTER_SPELL_ID    = 28675
 local TRANSMUTE_MASTER_SPELL_ID = 28672
 
 local DEFAULT_CRAFT_WINDOW        = 0.4   -- seconds to collect proc messages after first "You create"
-local DEFAULT_SESSION_TIMEOUT     = 900   -- 15 min inactivity → new session on next open
+local DEFAULT_SESSION_TIMEOUT     = 600   -- 10 min since last craft → new session on next open
 local DEFAULT_MAX_SESSIONS        = 200
 local DEFAULT_MAX_ITEMS_PER_GROUP = 150   -- max unique items tracked per group per session
 
@@ -226,6 +226,10 @@ local function FinalizeCraft()
     UpdateStats(groupStats, totalCreated, currentCraft.itemID, currentCraft.itemName)
     currentCraft = nil
 
+    -- Restart the inactivity timer from this craft; the session resets if nothing
+    -- is crafted within SessionTimeout() seconds.
+    RestartSessionTimer()
+
     if APT.RefreshUI then APT.RefreshUI() end
 end
 
@@ -312,6 +316,14 @@ end
 
 local function CancelCraftTimer()
     if craftTimer then craftTimer:Cancel(); craftTimer = nil end
+end
+
+local function RestartSessionTimer()
+    if sessionTimer then sessionTimer:Cancel() end
+    sessionTimer = C_Timer.NewTimer(SessionTimeout(), function()
+        sessionTimer  = nil
+        sessionClosed = true
+    end)
 end
 
 local function ScheduleCraftFinalize()
@@ -458,6 +470,8 @@ local function ResetSessionStats()
     end
     _sessionStatsCache           = nil
     APT.db.char.sessionStartTime = time()
+    sessionClosed                = false   -- clear any pending auto-reset flag
+    if sessionTimer then sessionTimer:Cancel(); sessionTimer = nil end
     APT:Print("Session stats have been reset.")
     if APT.RefreshUI then APT.RefreshUI() end
 end
@@ -557,6 +571,12 @@ end
 function APT:OnPlayerLogin()
     if DetectAlchemySpecialization() then
         self:UnregisterEvent("SKILL_LINES_CHANGED")
+    end
+    -- If the session timed out while the player was offline the in-memory
+    -- sessionTimer never fires, so check elapsed time here and flag accordingly.
+    local start = APT.db.char.sessionStartTime
+    if start and (time() - start) > SessionTimeout() then
+        sessionClosed = true
     end
 end
 
@@ -672,11 +692,6 @@ function APT:OnTradeSkillClose()
     -- Do not cancel the craft timer here: a proc message may still arrive within
     -- the accumulation window after the tradeskill window closes.  The timer will
     -- fire on its own and call FinalizeCraft once the window has passed.
-
-    -- Start inactivity timer; fires sessionClosed after timeout
-    if sessionTimer then sessionTimer:Cancel() end
-    sessionTimer = C_Timer.NewTimer(SessionTimeout(), function()
-        sessionTimer  = nil
-        sessionClosed = true
-    end)
+    -- The inactivity (session) timer is managed by FinalizeCraft so it counts
+    -- from the last completed craft, not from the window closing.
 end

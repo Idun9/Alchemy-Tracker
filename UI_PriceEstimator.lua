@@ -106,17 +106,17 @@ APT.RefreshPriceEstimator = function()
     local avgYield = tc > 0 and (sess.totalPotions / tc) or 1.0
     PE.avgYield:SetText(string.format("%.2fx", avgYield))
 
-    -- Revenue per craft (after AH fee)
-    local revPerCraft = avgYield * effectiveSell
-    PE.revPerCraft:SetText(FormatGold(revPerCraft))
+    -- Effective sell price for one item after AH cut
+    PE.revPerCraft:SetText(FormatGold(effectiveSell))
 
-    -- Profit per craft
-    local profitPerCraft = revPerCraft - costPerCraft
+    -- Profit per craft: sell price (after AH) minus material cost per craft
+    local profitPerCraft = effectiveSell - costPerCraft
     local pc = profitPerCraft >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
     PE.profitPerCraft:SetText(FormatGold(profitPerCraft))
     PE.profitPerCraft:SetTextColor(unpack(pc))
 
-    -- Session profit: (total items × effectiveSell) – (total crafts × costPerCraft)
+    -- Session profit: all items sold minus all material cost
+    -- totalPotions naturally includes proc extras so procs increase revenue
     local sessProfit = sess.totalPotions * effectiveSell - tc * costPerCraft
     local sc = sessProfit >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
     PE.sessProfit:SetText(FormatGold(sessProfit))
@@ -293,7 +293,7 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
 
     PE.costPerCraft   = MakeCalcRow("Cost / craft:",     curY) ; curY = curY - M_ROW_H
     PE.avgYield       = MakeCalcRow("Avg yield / craft:", curY) ; curY = curY - M_ROW_H
-    PE.revPerCraft    = MakeCalcRow("Revenue / craft:",   curY) ; curY = curY - M_ROW_H
+    PE.revPerCraft    = MakeCalcRow("Sell (after AH):",   curY) ; curY = curY - M_ROW_H
     PE.profitPerCraft = MakeCalcRow("Profit / craft:",    curY) ; curY = curY - M_ROW_H
     PE.sessProfit     = MakeCalcRow("Session profit:",    curY)
 

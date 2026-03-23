@@ -312,7 +312,10 @@ function APT:CreateSettingsUI()
 
     local refreshDebugCB = MakeCheckbox(f, "Debug Mode", S_W / 2, curY,
         function() return APT.debugMode end,
-        function(val) APT.debugMode = val end)
+        function(val)
+            APT.debugMode = val
+            APT.db.char.debugMode = val
+        end)
 
     curY = curY - 20
 
