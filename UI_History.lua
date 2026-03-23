@@ -15,7 +15,7 @@ local H_LABEL    = 26
 local H_MAX_ROWS = 500
 
 -- Panel heights / offsets
-local HEADER_BOT = 36    -- y from top where panels begin (below title/divider)
+local HEADER_BOT = 4     -- y from top of the embedded panel where content begins
 local FP_HDR_H   = 26    -- filter panel header height (collapsed)
 local FP_CNT_H   = 60    -- filter panel content height (when expanded)
 local SP_H       = 22    -- overall stats panel height
@@ -533,76 +533,27 @@ APT.RefreshHistory = function()
 end
 
 -- ============================================================
--- APT:CreateHistoryUI
--- Called once from OnInitialize; builds the frame and hides it.
+-- APT.CreateHistoryPanel
+-- Called once from CreateUI; builds the overall-tab content as a
+-- sub-frame of parentFrame.  Sets parentFrame.overallPanel and
+-- APT.historyFrame so the rest of the file works unchanged.
 -- ============================================================
-function APT:CreateHistoryUI()
-    local DrawBorders          = APT.DrawBorders
-    local MakeFrameCloseButton = APT.MakeFrameCloseButton
-    local MakeDivider          = APT.MakeDivider
-    local MakeResizeGrip       = APT.MakeResizeGrip
-    local theme                = APT.theme
-    local OR, GRN              = theme.OR, theme.GRN
-
-    local f = CreateFrame("Frame", "APT_HistoryFrame", UIParent, "BackdropTemplate")
-
-    local hp = APT.db.char.historyPos
-    f:SetSize(hp and hp.w or H_DEF_W, hp and hp.h or H_DEF_H)
-    if hp then
-        f:SetPoint(hp.point, UIParent, hp.relPoint or hp.point, hp.x, hp.y)
-    else
-        f:SetPoint("TOPLEFT", UIParent, "CENTER", 10, 200)
-    end
-    f._defW, f._defH = H_DEF_W, H_DEF_H
-
-    f:SetFrameStrata("HIGH")
-    f:SetMovable(true)
-    f:SetResizable(true)
-    f:SetToplevel(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetClampedToScreen(true)
+function APT.CreateHistoryPanel(parentFrame)
+    -- Create the embedded panel that fills the content area
+    local f = CreateFrame("Frame", nil, parentFrame)
+    f:SetPoint("TOPLEFT",     parentFrame, "TOPLEFT",     0, -45)
+    f:SetPoint("BOTTOMRIGHT", parentFrame, "BOTTOMRIGHT", 0,  0)
     f:Hide()
-    APT.historyFrame = f
+
+    parentFrame.overallPanel = f
+    APT.historyFrame         = f
 
     -- Restore persisted expansion state
     for k, v in pairs(APT.db.char.expandedSessions or {}) do
         expandedSessions[k] = v
     end
 
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function()
-        f:StopMovingOrSizing()
-        APT.SaveWindowPos(f, "historyPos")
-    end)
-
-    local _clamp = false
-    f:SetScript("OnSizeChanged", function(self, w, h)
-        if _clamp then return end
-        local nw, nh = math.max(w, 380), math.max(h, 200)
-        if nw ~= w or nh ~= h then
-            _clamp = true
-            self:SetSize(nw, nh)
-            _clamp = false
-        end
-    end)
-
-    -- Background
-    local bg = f:CreateTexture(nil, "BACKGROUND")
-    bg:SetAllPoints(f)
-    bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    bg:SetVertexColor(0.07, 0.07, 0.07)
-    bg:SetAlpha(0.97)
-    DrawBorders(f)
-
-    -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -10)
-    title:SetText("Crafting Session Tracker")
-    title:SetTextColor(OR[1], OR[2], OR[3])
-
-    MakeDivider(f, 8, -30, -8)
-    MakeFrameCloseButton(f)
+    local OR, GRN = APT.theme.OR, APT.theme.GRN
 
     -- ── Filter Panel ──────────────────────────────────────────
     local fp = CreateFrame("Frame", nil, f)
@@ -771,7 +722,7 @@ function APT:CreateHistoryUI()
     spBg:SetAllPoints(sp)
     spBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     spBg:SetVertexColor(OR[1] * 0.14, OR[2] * 0.14, OR[3] * 0.14, 0.90)
-    DrawBorders(sp)
+    APT.DrawBorders(sp)
 
     -- Orange left accent bar
     local spAccent = sp:CreateTexture(nil, "ARTWORK")
@@ -929,12 +880,6 @@ function APT:CreateHistoryUI()
     end)
     thumb:SetScript("OnMouseUp", function()
         thumb:SetScript("OnUpdate", nil)
-        UpdateScrollbar()
-    end)
-
-    -- ── Resize Grip ────────────────────────────────────────────
-    MakeResizeGrip(f, function(frame)
-        APT.SaveWindowPos(frame, "historyPos")
         UpdateScrollbar()
     end)
 

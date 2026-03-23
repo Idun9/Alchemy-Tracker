@@ -109,8 +109,7 @@ local defaults = {
             showBestFlask    = true,
             priceEstimator   = {
                 enabled   = false,
-                lotPrice  = 0,    -- total material cost for one lot, in copper
-                lotSize   = 1,    -- number of craft attempts covered by that lot
+                matCost   = 0,    -- material cost per craft attempt, in copper
                 sellPrice = 0,    -- sell price per item, in copper
                 ahFee     = true, -- deduct 5% AH cut from revenue
             },
@@ -433,8 +432,7 @@ local function SaveCurrentSession()
         duration = startTime and math.max(0, time() - startTime) or nil,
         stats    = {},
         priceSettings = {
-            lotPrice  = pe.lotPrice  or 0,
-            lotSize   = pe.lotSize   or 1,
+            matCost   = pe.matCost   or 0,
             sellPrice = pe.sellPrice or 0,
             ahFee     = pe.ahFee ~= false,
         },
@@ -545,8 +543,7 @@ function APT:OnInitialize()
 
     BuildTrackedItemLookup()
 
-    if self.CreateUI         then self:CreateUI()         end
-    if self.CreateHistoryUI  then self:CreateHistoryUI()  end
+    if self.CreateUI              then self:CreateUI()              end
     if self.RegisterMinimapButton then self:RegisterMinimapButton() end
     if self.CreateSettingsUI then self:CreateSettingsUI() end
 

@@ -1,17 +1,16 @@
 -- UI_Settings.lua
--- Custom settings window matching the addon's orange/dark theme.
--- Replaces the Blizzard Interface Options panel.
+-- Compact settings window matching the Figma redesign.
 
 local APT = AlchemyTracker
 
-local S_W   = 380   -- fixed window width
-local S_PAD = 14    -- left/right inner padding
+local S_W   = 380           -- window width
+local S_PAD = 14            -- left/right inner padding
+local S_IW  = S_W - S_PAD * 2  -- inner content width = 352
 
 -- ============================================================
 -- Local helpers
 -- ============================================================
 
--- Returns the first FontString region found on a frame.
 local function GetLabel(frame)
     for _, r in ipairs({ frame:GetRegions() }) do
         if r.GetObjectType and r:GetObjectType() == "FontString" then
@@ -20,136 +19,289 @@ local function GetLabel(frame)
     end
 end
 
--- Wraps MakeNavButton and caches its FontString as btn._label.
-local function MakeBtn(parent, label, w, h, onClick)
-    local btn = APT.MakeNavButton(parent, label, w, h, onClick)
-    btn._label = GetLabel(btn)
+-- Compact button: dark neutral background, dim amber border, white text.
+local function MakeCompactBtn(parent, label, w, h, onClick)
+    local OR  = APT.theme.OR
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(w, h)
+
+    local bbg = btn:CreateTexture(nil, "BACKGROUND")
+    bbg:SetAllPoints(btn)
+    bbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    bbg:SetVertexColor(0.10, 0.10, 0.10)
+    btn._bbg = bbg
+
+    local function MkEdge(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
+        local b = btn:CreateTexture(nil, "ARTWORK")
+        if isH then
+            b:SetPoint(p1, btn, rp1, x1, y1)
+            b:SetPoint(p2, btn, rp2, x2, y2)
+            b:SetHeight(1)
+        else
+            b:SetPoint(p1, btn, rp1, x1, y1)
+            b:SetPoint(p2, btn, rp2, x2, y2)
+            b:SetWidth(1)
+        end
+        b:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        b:SetVertexColor(OR[1] * 0.45, OR[2] * 0.45, OR[3] * 0.45, 0.65)
+    end
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "TOPRIGHT",    "TOPRIGHT",    0,  0, true)
+    MkEdge("BOTTOMLEFT", "BOTTOMLEFT", 0,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0, true)
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0, false)
+    MkEdge("TOPRIGHT",   "TOPRIGHT",  -1,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0, false)
+
+    local btxt = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btxt:SetAllPoints(btn)
+    btxt:SetText(label)
+    btxt:SetTextColor(0.90, 0.90, 0.90)   -- neutral-200
+    btxt:SetJustifyH("CENTER")
+    btn._label = btxt
+
+    btn:SetScript("OnEnter", function() bbg:SetVertexColor(0.18, 0.18, 0.18) end)
+    btn:SetScript("OnLeave", function() bbg:SetVertexColor(0.10, 0.10, 0.10) end)
+    btn:SetScript("OnClick", onClick or function() end)
     return btn
 end
 
--- Creates a small square checkbox with a label to its right.
--- Returns a Refresh() function that syncs the visual state.
-local function MakeCheckbox(parent, label, x, y, getF, setF)
-    local OR  = APT.theme.OR
-    local btn = CreateFrame("Button", nil, parent)
-    btn:SetSize(14, 14)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+-- Bordered section box with amber-tinted header bar.
+-- Returns an inner content Frame to place controls in.
+-- The content frame is (S_IW - 8) wide, positioned 18px below box top.
+local function MakeSectionBox(parent, label, y, contentH)
+    local OR     = APT.theme.OR
+    local totalH = 18 + contentH
 
-    local box = btn:CreateTexture(nil, "BACKGROUND")
-    box:SetAllPoints()
-    box:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    box:SetVertexColor(0.20, 0.20, 0.20)
+    local box = CreateFrame("Frame", nil, parent)
+    box:SetSize(S_IW, totalH)
+    box:SetPoint("TOPLEFT", parent, "TOPLEFT", S_PAD, y)
 
-    local check = btn:CreateTexture(nil, "OVERLAY")
-    check:SetAllPoints()
-    check:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    check:SetVertexColor(OR[1], OR[2], OR[3])
+    local function MkEdge(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
+        local b = box:CreateTexture(nil, "ARTWORK")
+        if isH then
+            b:SetPoint(p1, box, rp1, x1, y1)
+            b:SetPoint(p2, box, rp2, x2, y2)
+            b:SetHeight(1)
+        else
+            b:SetPoint(p1, box, rp1, x1, y1)
+            b:SetPoint(p2, box, rp2, x2, y2)
+            b:SetWidth(1)
+        end
+        b:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        b:SetVertexColor(OR[1] * 0.55, OR[2] * 0.55, OR[3] * 0.55, 0.65)
+    end
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "TOPRIGHT",    "TOPRIGHT",    0,  0, true)
+    MkEdge("BOTTOMLEFT", "BOTTOMLEFT", 0,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0, true)
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0, false)
+    MkEdge("TOPRIGHT",   "TOPRIGHT",  -1,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0, false)
 
-    local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    lbl:SetPoint("LEFT", btn, "RIGHT", 5, 0)
+    -- Header background
+    local hdrBg = box:CreateTexture(nil, "BACKGROUND")
+    hdrBg:SetPoint("TOPLEFT",  box, "TOPLEFT",  1, -1)
+    hdrBg:SetPoint("TOPRIGHT", box, "TOPRIGHT", -1, -1)
+    hdrBg:SetHeight(16)
+    hdrBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    hdrBg:SetVertexColor(OR[1] * 0.08, OR[2] * 0.08, OR[3] * 0.08)
+
+    -- Divider between header and content
+    local hdrDiv = box:CreateTexture(nil, "ARTWORK")
+    hdrDiv:SetPoint("TOPLEFT",  box, "TOPLEFT",  1, -17)
+    hdrDiv:SetPoint("TOPRIGHT", box, "TOPRIGHT", -1, -17)
+    hdrDiv:SetHeight(1)
+    hdrDiv:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    hdrDiv:SetVertexColor(OR[1] * 0.40, OR[2] * 0.40, OR[3] * 0.40, 0.55)
+
+    local hdrLbl = box:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrLbl:SetPoint("TOPLEFT", box, "TOPLEFT", 6, -2)
+    hdrLbl:SetText(label)
+    hdrLbl:SetTextColor(0.99, 0.83, 0.30)   -- amber-300
+
+    local content = CreateFrame("Frame", nil, box)
+    content:SetPoint("TOPLEFT",     box, "TOPLEFT",     4, -18)
+    content:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -4,  0)
+
+    return content
+end
+
+-- Bordered checkbox tile: dark card with small checkbox square + label.
+-- Returns a Refresh() function.
+local function MakeTileCheckbox(parent, label, x, y, w, getF, setF)
+    local OR   = APT.theme.OR
+    local tile = CreateFrame("Button", nil, parent)
+    tile:SetSize(w, 22)
+    tile:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+
+    local tileBg = tile:CreateTexture(nil, "BACKGROUND")
+    tileBg:SetAllPoints(tile)
+    tileBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    tileBg:SetVertexColor(0.10, 0.10, 0.10)
+
+    local function MkEdge(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
+        local b = tile:CreateTexture(nil, "ARTWORK")
+        if isH then
+            b:SetPoint(p1, tile, rp1, x1, y1)
+            b:SetPoint(p2, tile, rp2, x2, y2)
+            b:SetHeight(1)
+        else
+            b:SetPoint(p1, tile, rp1, x1, y1)
+            b:SetPoint(p2, tile, rp2, x2, y2)
+            b:SetWidth(1)
+        end
+        b:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+        b:SetVertexColor(OR[1] * 0.42, OR[2] * 0.42, OR[3] * 0.42, 0.55)
+    end
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "TOPRIGHT",    "TOPRIGHT",    0,  0, true)
+    MkEdge("BOTTOMLEFT", "BOTTOMLEFT", 0,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0, true)
+    MkEdge("TOPLEFT",    "TOPLEFT",    0,  0, "BOTTOMLEFT",  "BOTTOMLEFT",  0,  0, false)
+    MkEdge("TOPRIGHT",   "TOPRIGHT",  -1,  0, "BOTTOMRIGHT", "BOTTOMRIGHT", -1, 0, false)
+
+    local cbBg = tile:CreateTexture(nil, "ARTWORK")
+    cbBg:SetSize(10, 10)
+    cbBg:SetPoint("LEFT", tile, "LEFT", 6, 0)
+    cbBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    cbBg:SetVertexColor(0.18, 0.18, 0.18)
+
+    local cbCheck = tile:CreateTexture(nil, "OVERLAY")
+    cbCheck:SetSize(10, 10)
+    cbCheck:SetPoint("LEFT", tile, "LEFT", 6, 0)
+    cbCheck:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+    cbCheck:SetVertexColor(OR[1], OR[2], OR[3])
+
+    local lbl = tile:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbl:SetPoint("LEFT",  tile, "LEFT",  20, 0)
+    lbl:SetPoint("RIGHT", tile, "RIGHT", -4, 0)
     lbl:SetText(label)
-    lbl:SetTextColor(1, 1, 1)
+    lbl:SetTextColor(0.90, 0.90, 0.90)   -- neutral-200
+    lbl:SetJustifyH("LEFT")
+    lbl:SetWordWrap(false)
 
     local function Refresh()
-        check:SetAlpha(getF() and 1 or 0)
+        cbCheck:SetAlpha(getF() and 1 or 0)
     end
 
-    btn:SetScript("OnClick", function()
-        setF(not getF())
-        Refresh()
-    end)
-    btn:SetScript("OnEnter", function() box:SetVertexColor(0.35, 0.35, 0.35) end)
-    btn:SetScript("OnLeave", function() box:SetVertexColor(0.20, 0.20, 0.20) end)
-
+    tile:SetScript("OnClick",  function() setF(not getF()); Refresh() end)
+    tile:SetScript("OnEnter",  function() tileBg:SetVertexColor(0.16, 0.16, 0.16) end)
+    tile:SetScript("OnLeave",  function() tileBg:SetVertexColor(0.10, 0.10, 0.10) end)
     Refresh()
     return Refresh
 end
 
--- Creates a labelled horizontal slider with a current-value readout and
--- min/max endpoint labels.  Returns a Refresh() function.
-local function MakeSlider(parent, label, x, y, w, minV, maxV, step, getF, setF, fmtF)
+-- Slider with inline number EditBox.  y is relative to parent TOPLEFT.
+-- Occupies ~42px vertically (54px if warnF provided).
+-- Returns a Refresh() function.
+local function MakeSliderInput(parent, label, x, y, w, minV, maxV, step, getF, setF, fmtF, warnF)
     local OR = APT.theme.OR
     fmtF = fmtF or function(v) return string.format("%.1f", v) end
 
-    -- Row 1: descriptor label (left) + current value (right)
+    -- Row 1: label (left) + editable value (right)
     local lblFS = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lblFS:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     lblFS:SetText(label)
-    lblFS:SetTextColor(0.76, 0.76, 0.76)
+    lblFS:SetTextColor(0.83, 0.83, 0.83)   -- neutral-300
 
-    local valFS = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    valFS:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y)
-    valFS:SetJustifyH("RIGHT")
-    valFS:SetTextColor(OR[1], OR[2], OR[3])
+    local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    eb:SetSize(42, 14)
+    eb:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y + 1)
+    eb:SetAutoFocus(false)
+    eb:SetMaxLetters(6)
 
-    -- Coloured track strip behind the slider thumb
+    -- Track strip
     local track = parent:CreateTexture(nil, "BACKGROUND")
-    track:SetPoint("TOPLEFT",  parent, "TOPLEFT", x,     y - 22)
-    track:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y - 22)
-    track:SetHeight(4)
+    track:SetPoint("TOPLEFT",  parent, "TOPLEFT", x,     y - 20)
+    track:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y - 20)
+    track:SetHeight(3)
     track:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     track:SetVertexColor(0.22, 0.22, 0.22)
 
-    -- Slider frame
+    -- Slider
     local sl = CreateFrame("Slider", nil, parent)
-    sl:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 16)
-    sl:SetSize(w, 16)
+    sl:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 14)
+    sl:SetSize(w, 14)
     sl:SetOrientation("HORIZONTAL")
     sl:SetMinMaxValues(minV, maxV)
     sl:SetValueStep(step)
     sl:EnableMouseWheel(true)
     sl:SetThumbTexture("Interface\\BUTTONS\\WHITE8X8")
-
     local thumb = sl.GetThumbTexture and sl:GetThumbTexture()
-    if thumb then
-        thumb:SetSize(10, 20)
-        thumb:SetVertexColor(OR[1], OR[2], OR[3])
-    end
+    if thumb then thumb:SetSize(8, 18); thumb:SetVertexColor(OR[1], OR[2], OR[3]) end
 
     -- Row 3: min/max endpoint labels
     local minFS = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    minFS:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 32)
+    minFS:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 30)
     minFS:SetText(fmtF(minV))
-    minFS:SetTextColor(0.45, 0.45, 0.45)
+    minFS:SetTextColor(0.45, 0.45, 0.45)   -- neutral-500
 
     local maxFS = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    maxFS:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y - 32)
+    maxFS:SetPoint("TOPRIGHT", parent, "TOPLEFT", x + w, y - 30)
     maxFS:SetJustifyH("RIGHT")
     maxFS:SetText(fmtF(maxV))
-    maxFS:SetTextColor(0.45, 0.45, 0.45)
+    maxFS:SetTextColor(0.45, 0.45, 0.45)   -- neutral-500
 
-    -- Guard against recursive OnValueChanged calls from SetValue() in Refresh.
+    -- Optional warning row (always at y-42, only shows text when condition met)
+    local warnFS
+    if warnF then
+        warnFS = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        warnFS:SetPoint("TOPLEFT",  parent, "TOPLEFT",  x,     y - 42)
+        warnFS:SetPoint("TOPRIGHT", parent, "TOPLEFT",  x + w, y - 42)
+        warnFS:SetHeight(12)
+        warnFS:SetTextColor(0.97, 0.44, 0.44)   -- red-400
+        warnFS:SetJustifyH("LEFT")
+        warnFS:SetWordWrap(false)
+        warnFS:SetText("")
+    end
+
     local _updating = false
 
-    sl:SetScript("OnValueChanged", function(self, val)
-        if _updating then return end
+    local function Apply(val)
         local snapped = math.floor(val / step + 0.5) * step
         snapped = math.max(minV, math.min(maxV, snapped))
         setF(snapped)
-        valFS:SetText(fmtF(snapped))
+        eb:SetText(fmtF(snapped))
+        if warnFS then warnFS:SetText(warnF(snapped) or "") end
+        return snapped
+    end
+
+    sl:SetScript("OnValueChanged", function(self, val)
+        if _updating then return end
+        local snapped = Apply(val)
+        _updating = true; self:SetValue(snapped); _updating = false
     end)
 
     sl:SetScript("OnMouseWheel", function(self, delta)
         self:SetValue(math.max(minV, math.min(maxV, self:GetValue() + delta * step)))
     end)
 
-    -- Initialise display
+    eb:SetScript("OnEnterPressed", function(self)
+        local val = tonumber(self:GetText())
+        if val then
+            local snapped = Apply(val)
+            _updating = true; sl:SetValue(snapped); _updating = false
+        else
+            self:SetText(fmtF(getF()))
+        end
+        self:ClearFocus()
+    end)
+    eb:SetScript("OnEscapePressed", function(self)
+        self:SetText(fmtF(getF())); self:ClearFocus()
+    end)
+    eb:SetScript("OnEditFocusLost", function(self)
+        self:SetText(fmtF(getF()))
+    end)
+
+    -- Initialise
     local initVal = getF()
-    sl:SetValue(initVal)
-    valFS:SetText(fmtF(initVal))
+    _updating = true; sl:SetValue(initVal); _updating = false
+    eb:SetText(fmtF(initVal))
+    if warnFS then warnFS:SetText(warnF(initVal) or "") end
 
     return function()
         local v = getF()
-        _updating = true
-        sl:SetValue(v)
-        _updating = false
-        valFS:SetText(fmtF(v))
+        _updating = true; sl:SetValue(v); _updating = false
+        eb:SetText(fmtF(v))
+        if warnFS then warnFS:SetText(warnF(v) or "") end
     end
 end
 
 -- ============================================================
 -- APT:CreateSettingsUI
--- Called once from OnInitialize; builds the frame and hides it.
 -- ============================================================
 function APT:CreateSettingsUI()
     local DrawBorders          = APT.DrawBorders
@@ -158,7 +310,7 @@ function APT:CreateSettingsUI()
     local OR                   = APT.theme.OR
 
     local f = CreateFrame("Frame", "APT_SettingsFrame", UIParent, "BackdropTemplate")
-    f:SetSize(S_W, 100)  -- height set dynamically below
+    f:SetSize(S_W, 100)   -- height set dynamically below
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     f:SetFrameStrata("HIGH")
     f:SetMovable(true)
@@ -177,215 +329,199 @@ function APT:CreateSettingsUI()
     bg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     bg:SetVertexColor(0.09, 0.09, 0.09)
     bg:SetAlpha(0.97)
-
     DrawBorders(f)
 
-    -- Header strip
+    -- ── Header (40 px tall) ────────────────────────────────────
     local hdrBg = f:CreateTexture(nil, "BACKGROUND")
     hdrBg:SetPoint("TOPLEFT",  f, "TOPLEFT",  1, -1)
     hdrBg:SetPoint("TOPRIGHT", f, "TOPRIGHT", -1, -1)
-    hdrBg:SetHeight(28)
+    hdrBg:SetHeight(40)
     hdrBg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
     hdrBg:SetVertexColor(0.04, 0.04, 0.04)
 
     MakeFrameCloseButton(f)
 
-    local curY = -7
+    -- Gear glyph + title
+    local gearLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    gearLbl:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, -8)
+    gearLbl:SetText("\226\154\153")   -- ⚙ U+2699
+    gearLbl:SetTextColor(OR[1], OR[2], OR[3])
 
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-    title:SetText("Alchemy Tracker  —  Settings")
-    title:SetTextColor(1, 0.76, 0.18)
-    curY = curY - 28
+    local titleLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    titleLbl:SetPoint("TOPLEFT", gearLbl, "TOPRIGHT", 4, 0)
+    titleLbl:SetText("Addon Settings")
+    titleLbl:SetTextColor(OR[1], OR[2], OR[3])
 
-    MakeDivider(f, 1, curY, -1)
-    curY = curY - 4
+    local subLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    subLbl:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, -24)
+    subLbl:SetText("Configure your alchemy tracker preferences")
+    subLbl:SetTextColor(0.64, 0.64, 0.64)   -- neutral-400
 
-    -- ── section header helper (modifies curY upvalue) ───────────
-    local function SectionHeader(label)
-        local hbg = f:CreateTexture(nil, "BACKGROUND")
-        hbg:SetPoint("TOPLEFT",  f, "TOPLEFT",  1, curY)
-        hbg:SetPoint("TOPRIGHT", f, "TOPRIGHT", -1, curY)
-        hbg:SetHeight(18)
-        hbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-        hbg:SetVertexColor(OR[1] * 0.12, OR[2] * 0.12, OR[3] * 0.12)
+    MakeDivider(f, 1, -40, -1)
 
-        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY - 2)
-        lbl:SetText(label)
-        lbl:SetTextColor(OR[1], OR[2], OR[3])
-        curY = curY - 20
-    end
+    local curY = -44   -- content starts here
 
-    -- ── Window ───────────────────────────────────────────────────
-    SectionHeader("Window")
+    -- ── Action buttons — row 1 (3 columns) ───────────────────
+    -- widths: floor((352 - 8) / 3) = 114 px each, 4 px gaps
+    local w3 = math.floor((S_IW - 8) / 3)   -- 114
 
-    local toggleBtn
-    toggleBtn = MakeBtn(f, "Show Stats Window", S_W - S_PAD * 2, 20, function()
+    local toggleBtn = MakeCompactBtn(f, "Hide Window", w3, 22, nil)
+    toggleBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
+    toggleBtn:SetScript("OnClick", function()
         if APT.frame then
             if APT.frame:IsShown() then
                 APT.frame:Hide()
-                if toggleBtn._label then toggleBtn._label:SetText("Show Stats Window") end
+                toggleBtn._label:SetText("Show Window")
             else
                 APT.frame:Show()
                 APT.RefreshUI()
-                if toggleBtn._label then toggleBtn._label:SetText("Hide Stats Window") end
+                toggleBtn._label:SetText("Hide Window")
             end
         end
     end)
-    toggleBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-    curY = curY - 28
 
-    -- ── Session History ───────────────────────────────────────────
-    SectionHeader("Session History")
-
-    local histBtn
-    histBtn = MakeBtn(f, "Browse Session History", S_W - S_PAD * 2, 20, function()
-        if APT.historyFrame then
-            if APT.historyFrame:IsShown() then
-                APT.historyFrame:Hide()
-            else
-                APT.historyFrame:Show()
-                APT.RefreshHistory()
-            end
+    local histBtn = MakeCompactBtn(f, "Browse History", w3, 22, function()
+        if APT.frame and APT.SwitchTab then
+            APT.frame:Show(); APT.SwitchTab("overall")
         end
     end)
-    histBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-    curY = curY - 28
+    histBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD + w3 + 4, curY)
 
-    -- ── Developer ─────────────────────────────────────────────────
-    SectionHeader("Developer")
-
-    MakeBtn(f, "Load Test Data", S_W - S_PAD * 2, 20, function()
+    local testBtn = MakeCompactBtn(f, "Test Data", w3, 22, function()
         APT.InjectTestData()
-        APT:Print("Test data injected — 5 sessions, 10 items.")
-    end):SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-    curY = curY - 28
+        APT:Print("Test data injected.")
+    end)
+    testBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD + w3 * 2 + 8, curY)
 
-    -- ── Reset ─────────────────────────────────────────────────────
-    SectionHeader("Reset")
+    curY = curY - 22 - 3   -- -69
 
-    local btnW = math.floor((S_W - S_PAD * 2 - 8) / 2)
+    -- ── Action buttons — row 2 (2 columns) ───────────────────
+    local w2 = math.floor((S_IW - 4) / 2)   -- 174
 
-    local function MakeConfirmBtn(label, xPos, action)
-        local pending, timer = false, nil
-        local btn = MakeBtn(f, label, btnW, 20, nil)
-        btn:SetPoint("TOPLEFT", f, "TOPLEFT", xPos, curY)
-        btn:SetScript("OnClick", function()
-            if pending then
-                pending = false
-                if timer then timer:Cancel(); timer = nil end
-                if btn._label then btn._label:SetText(label) end
-                action()
-            else
-                pending = true
-                if btn._label then btn._label:SetText("Are you sure?") end
-                timer = C_Timer.NewTimer(2, function()
-                    pending = false
-                    timer   = nil
-                    if btn._label then btn._label:SetText(label) end
-                end)
-            end
-        end)
-        return btn
-    end
+    local resetSessBtn = MakeCompactBtn(f, "Reset Session", w2, 22, APT.ResetSessionStats)
+    resetSessBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
 
-    MakeBtn(f, "Reset Session Stats", btnW, 20, APT.ResetSessionStats)
-        :SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD, curY)
-    MakeConfirmBtn("Reset All Stats", S_PAD + btnW + 8, APT.ResetAllStats)
-    curY = curY - 28
+    -- "Reset All" with 2-second confirm
+    local resetAllBtn
+    local _raPending, _raTimer = false, nil
+    resetAllBtn = MakeCompactBtn(f, "Reset All", w2, 22, function()
+        if _raPending then
+            _raPending = false
+            if _raTimer then _raTimer:Cancel(); _raTimer = nil end
+            resetAllBtn._label:SetText("Reset All")
+            resetAllBtn._bbg:SetVertexColor(0.10, 0.10, 0.10)
+            APT.ResetAllStats()
+        else
+            _raPending = true
+            resetAllBtn._label:SetText("Are you sure?")
+            resetAllBtn._bbg:SetVertexColor(0.60, 0.11, 0.11)   -- red-800/80
+            _raTimer = C_Timer.NewTimer(2, function()
+                _raPending = false; _raTimer = nil
+                resetAllBtn._label:SetText("Reset All")
+                resetAllBtn._bbg:SetVertexColor(0.10, 0.10, 0.10)
+            end)
+        end
+    end)
+    resetAllBtn:SetPoint("TOPLEFT", f, "TOPLEFT", S_PAD + w2 + 4, curY)
 
-    -- ── Interface ─────────────────────────────────────────────────
-    SectionHeader("Interface")
+    curY = curY - 22 - 5   -- -96
 
-    local refreshMiniCB = MakeCheckbox(f, "Show Minimap Button", S_PAD, curY,
+    -- ── Interface Options section ─────────────────────────────
+    -- 2×2 grid of tile checkboxes, 22 px each, 3 px row gap, 4 px padding
+    -- contentH = 4 + 22 + 3 + 22 + 4 = 55
+    local ifContent = MakeSectionBox(f, "Interface Options", curY, 55)
+    local tileW = math.floor((S_IW - 8 - 4) / 2)   -- content width=344, (344-4)/2=170
+
+    local refreshMiniCB = MakeTileCheckbox(ifContent, "Minimap Button", 0, -4, tileW,
         function() return not APT.db.global.minimap.hide end,
         function(val)
             APT.db.global.minimap.hide = not val
             local LibDBIcon = LibStub("LibDBIcon-1.0", true)
             if LibDBIcon then
                 if val then LibDBIcon:Show("AlchemyTracker")
-                else         LibDBIcon:Hide("AlchemyTracker")
-                end
+                else         LibDBIcon:Hide("AlchemyTracker") end
             end
         end)
 
-    local refreshDebugCB = MakeCheckbox(f, "Debug Mode", S_W / 2, curY,
+    local refreshDebugCB = MakeTileCheckbox(ifContent, "Debug Mode", tileW + 4, -4, tileW,
         function() return APT.debugMode end,
         function(val)
             APT.debugMode = val
             APT.db.char.debugMode = val
         end)
 
-    curY = curY - 20
-
-    local refreshBestFlaskCB = MakeCheckbox(f, "Show Best Item", S_PAD, curY,
+    local refreshBestItemCB = MakeTileCheckbox(ifContent, "Show Best Item", 0, -29, tileW,
         function() return APT.db.char.settings.showBestFlask end,
         function(val)
             APT.db.char.settings.showBestFlask = val
-            if APT.historyFrame and APT.historyFrame:IsShown() then
-                APT.RefreshHistory()
-            end
+            if APT.RefreshHistory then APT.RefreshHistory() end
         end)
 
-    curY = curY - 28
+    local refreshAHCutCB = MakeTileCheckbox(ifContent, "Include AH Cut (5%)", tileW + 4, -29, tileW,
+        function() return APT.db.char.settings.priceEstimator.ahFee ~= false end,
+        function(val)
+            APT.db.char.settings.priceEstimator.ahFee = val
+            if APT.RefreshPriceEstimator then APT.RefreshPriceEstimator() end
+        end)
 
-    -- ── Detection & Session ───────────────────────────────────────
-    SectionHeader("Detection & Session")
+    curY = curY - (18 + 55) - 5   -- -174
 
-    local slW = math.floor((S_W - S_PAD * 2 - 12) / 2)
+    -- ── Detection & Session section ───────────────────────────
+    -- Each slider: label(14) + slider(14) + minmax(12) + warning(12) = 52 px
+    -- contentH = 4 + 52 + 4 = 60
+    local detContent = MakeSectionBox(f, "Detection & Session", curY, 60)
+    local slW = math.floor((S_IW - 8 - 4) / 2)   -- 170
 
-    local refreshCraftSl = MakeSlider(f, "Craft Window (s)",
-        S_PAD, curY, slW, 0.1, 2.0, 0.1,
+    local refreshCraftSl = MakeSliderInput(detContent,
+        "Craft Window (s)", 0, -4, slW,
+        0.1, 2.0, 0.1,
         function() return APT.db.char.settings.craftWindow end,
         function(v) APT.db.char.settings.craftWindow = v end,
-        function(v) return string.format("%.1f", v) end)
+        function(v) return string.format("%.1f", v) end,
+        function(v)
+            return v <= 0.3 and "\226\154\160 Too low — server lag may cause missed procs" or nil
+        end)
 
-    local refreshTimeoutSl = MakeSlider(f, "Session Timeout (min)",
-        S_PAD + slW + 12, curY, slW, 5, 120, 5,
-        function() return APT.db.char.settings.sessionTimeout / 60 end,
+    local refreshTimeoutSl = MakeSliderInput(detContent,
+        "Session Timeout (min)", slW + 4, -4, slW,
+        1, 30, 1,
+        function() return math.max(1, math.min(30, math.floor(APT.db.char.settings.sessionTimeout / 60 + 0.5))) end,
         function(v) APT.db.char.settings.sessionTimeout = v * 60 end,
         function(v) return string.format("%d", v) end)
 
-    curY = curY - 48
+    curY = curY - (18 + 60) - 5   -- -257
 
-    -- ── Storage Caps ──────────────────────────────────────────────
-    SectionHeader("Storage Caps")
+    -- ── Storage Caps section ──────────────────────────────────
+    -- No warning row; contentH = 4 + 40 + 4 = 48
+    local stgContent = MakeSectionBox(f, "Storage Caps", curY, 48)
 
-    local refreshMaxSessSl = MakeSlider(f, "Max Saved Sessions",
-        S_PAD, curY, slW, 10, 500, 10,
+    local refreshMaxSessSl = MakeSliderInput(stgContent,
+        "Max Saved Sessions", 0, -4, slW,
+        10, 500, 10,
         function() return APT.db.char.settings.maxSessions end,
         function(v) APT.db.char.settings.maxSessions = v end,
         function(v) return string.format("%d", v) end)
 
-    local refreshMaxItemsSl = MakeSlider(f, "Max Items per Group",
-        S_PAD + slW + 12, curY, slW, 10, 500, 10,
+    local refreshMaxItemsSl = MakeSliderInput(stgContent,
+        "Max Items per Group", slW + 4, -4, slW,
+        10, 500, 10,
         function() return APT.db.char.settings.maxItemsPerGroup end,
         function(v) APT.db.char.settings.maxItemsPerGroup = v end,
         function(v) return string.format("%d", v) end)
 
-    curY = curY - 48
+    curY = curY - (18 + 48)   -- -323
 
-    -- Bottom Close button
-    local closeBtn = APT.MakeNavButton(f, "Close", 80, 22, function() f:Hide() end)
-    closeBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -S_PAD, S_PAD)
+    -- Fit frame to content
+    f:SetHeight(math.abs(curY) + S_PAD)
 
-    -- Size the frame to exactly fit the content
-    f:SetHeight(math.abs(curY) + 36)
-
-    -- ── OnShow: sync all dynamic content ─────────────────────────
+    -- ── OnShow: sync all controls to current DB state ─────────
     f:SetScript("OnShow", function()
-        -- Window toggle label
-        if toggleBtn._label then
-            toggleBtn._label:SetText(
-                (APT.frame and APT.frame:IsShown())
-                and "Hide Stats Window" or "Show Stats Window")
-        end
-
-        -- Checkboxes and sliders
+        toggleBtn._label:SetText(
+            (APT.frame and APT.frame:IsShown()) and "Hide Window" or "Show Window")
         refreshMiniCB()
         refreshDebugCB()
-        refreshBestFlaskCB()
+        refreshBestItemCB()
+        refreshAHCutCB()
         refreshCraftSl()
         refreshTimeoutSl()
         refreshMaxSessSl()
@@ -394,7 +530,7 @@ function APT:CreateSettingsUI()
 end
 
 -- ============================================================
--- APT.OpenSettings  (called from slash command / minimap menu)
+-- APT.OpenSettings
 -- ============================================================
 function APT.OpenSettings()
     if APT.settingsFrame then

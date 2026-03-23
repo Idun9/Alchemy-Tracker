@@ -4,16 +4,17 @@
 local APT = AlchemyTracker
 
 local theme = {
-    OR  = { 1,    0.55, 0.10        },   -- orange accent
-    ORD = { 0.70, 0.33, 0.05        },   -- dark orange (button normal state)
+    OR  = { 0.98, 0.75, 0.14        },   -- amber-400 accent
+    ORD = { 0.71, 0.33, 0.04        },   -- amber-700 (button normal state)
     DIV = { 0.40, 0.22, 0.03, 0.50  },   -- dim divider
-    GRN = { 0.20, 0.85, 0.50        },   -- green for proc% values
+    GRN = { 0.20, 0.83, 0.60        },   -- emerald-400 for proc% values
 }
 APT.theme = theme
 
 -- DrawBorders: uses child frames for edges to avoid scissor-clipping at parent boundary.
 local function DrawBorders(frame)
-    local OR = theme.OR
+    -- amber-700/65 border to match Figma `border-amber-700/60`
+    local BR = { 0.71, 0.33, 0.04, 0.65 }
     local function MakeLine(p1, rp1, x1, y1, p2, rp2, x2, y2, isH)
         local b = CreateFrame("Frame", nil, frame)
         b:SetPoint(p1, frame, rp1, x1, y1)
@@ -22,7 +23,7 @@ local function DrawBorders(frame)
         local t = b:CreateTexture(nil, "BACKGROUND")
         t:SetAllPoints(b)
         t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-        t:SetVertexColor(OR[1], OR[2], OR[3])
+        t:SetVertexColor(BR[1], BR[2], BR[3], BR[4])
     end
     MakeLine("TOPLEFT",    "TOPLEFT",    0, 0,  "TOPRIGHT",    "TOPRIGHT",    0,  0,  true)
     MakeLine("BOTTOMLEFT", "BOTTOMLEFT", 0, 0,  "BOTTOMRIGHT", "BOTTOMRIGHT", 0,  0,  true)
@@ -58,7 +59,7 @@ local function MakeFrameCloseButton(parent)
     local cbg = btn:CreateTexture(nil, "BACKGROUND")
     cbg:SetAllPoints(btn)
     cbg:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-    cbg:SetVertexColor(0.60, 0.08, 0.08)
+    cbg:SetVertexColor(0.73, 0.11, 0.11)   -- red-700
     local cx = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     cx:SetAllPoints(btn)
     cx:SetText("X")

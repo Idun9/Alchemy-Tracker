@@ -1,43 +1,35 @@
 -- UI_PriceEstimator.lua
 -- Collapsible price estimator panel attached to the main stats window.
--- Toggled by the "$" button in the header.
+-- Toggled by the Coins button in the header (session tab only).
 --
--- Cost model:
---   The user inputs the total lot price and how many crafts that lot covers.
---   Cost / craft = lotPrice / lotSize.
---   Profit / craft = (avgYield × sellPrice × (1 – AH_FEE)) – costPerCraft
---   Session profit  = (totalPotions × effectiveSell) – (totalCrafts × costPerCraft)
+-- Inputs use separate Gold / Silver / Copper boxes matching the WoW money UI.
+-- Values are stored internally as copper integers.
 --
 -- Auction addon integration (future):
---   The GetAuctionPrice() function checks for TSM, Auctionator, and Auctioneer
---   in priority order before falling back to manual input.  To activate an
---   integration, simply fill in the relevant block — no other code needs changing.
+--   GetAuctionPrice() checks TSM → Auctionator → Auctioneer → nil.
 
 local APT = AlchemyTracker
 
-local PANEL_H  = 202   -- pixel height of the estimator section (10 rows)
-local M_PAD    = 12
-local M_ROW_H  = 18
-local AH_FEE   = 0.05  -- 5% Auction House cut (TBC Classic standard)
+local PANEL_H = 76    -- divider(10) + mat row(18) + sell row(18) + gap(6) + divider(10) + profit row(18) + padding(8) - 4
+local M_PAD   = 12
+local M_ROW_H = 18
+local AH_FEE  = 0.05  -- 5 % Auction House cut (TBC Classic standard)
+
+-- Expose panel height so UI_Main can read it when switching tabs.
+APT.PANEL_H = PANEL_H
 
 -- ============================================================
 -- Auction addon price lookup — returns copper or nil.
--- Priority: TSM → Auctionator → Auctioneer → nil (manual fallback).
 -- ============================================================
 local function GetAuctionPrice(itemID)
-    -- TSM
     if TSM_API then
         local ok, val = pcall(TSM_API.GetCustomPriceValue, "DBMarket", "i:" .. itemID)
         if ok and type(val) == "number" and val > 0 then return val end
     end
-
-    -- Auctionator
     if Auctionator and Auctionator.API and Auctionator.API.v1 then
         local ok, val = pcall(Auctionator.API.v1.GetAuctionPriceByItemID, "AlchemyTracker", itemID)
         if ok and type(val) == "number" and val > 0 then return val end
     end
-
-    -- Auctioneer
     if AucAdvanced and AucAdvanced.API then
         local link = select(2, GetItemInfo(itemID))
         if link then
@@ -45,7 +37,6 @@ local function GetAuctionPrice(itemID)
             if ok and type(val) == "number" and val > 0 then return val end
         end
     end
-
     return nil
 end
 APT.GetAuctionPrice = GetAuctionPrice
@@ -53,26 +44,41 @@ APT.GetAuctionPrice = GetAuctionPrice
 -- ============================================================
 -- Helpers
 -- ============================================================
-local function FormatGold(copper)
-    if not copper or copper == 0 then return "0.00g" end
-    local sign = copper < 0 and "-" or ""
-    return string.format("%s%.2fg", sign, math.abs(copper) / 10000)
+local function CopperToGSC(copper)
+    copper = math.floor(math.max(0, copper or 0) + 0.5)
+    return math.floor(copper / 10000),
+           math.floor((copper % 10000) / 100),
+           copper % 100
 end
 
-local function ParseGoldInput(text)
-    if not text then return nil end
-    local clean = text:match("^%s*(.-)%s*$"):gsub(",", ".")
-    local g = tonumber(clean)
-    if not g or g < 0 then return nil end
-    return math.floor(g * 10000 + 0.5)
+local function GSCToCopper(g, s, c)
+    return math.max(0, (g or 0)) * 10000
+         + math.max(0, math.min(99, (s or 0))) * 100
+         + math.max(0, math.min(99, (c or 0)))
 end
 
-local function ParseIntInput(text)
-    if not text then return nil end
-    local clean = text:match("^%s*(.-)%s*$")
-    local n = tonumber(clean)
-    if not n or n < 1 then return nil end
-    return math.floor(n + 0.5)
+local function FormatGSC(copper)
+    if not copper then return "0g 0s 0c" end
+    local neg = copper < 0
+    local abs = math.floor(math.abs(copper) + 0.5)
+    local g   = math.floor(abs / 10000)
+    local s   = math.floor((abs % 10000) / 100)
+    local c   = abs % 100
+    if neg then
+        return string.format("-%dg %ds %dc", g, s, c)
+    else
+        return string.format("%dg %ds %dc", g, s, c)
+    end
+end
+
+local function FormatGSCProfit(copper)
+    if not copper then return "+0g 0s 0c" end
+    local sign = copper >= 0 and "+" or "-"
+    local abs  = math.floor(math.abs(copper) + 0.5)
+    local g    = math.floor(abs / 10000)
+    local s    = math.floor((abs % 10000) / 100)
+    local c    = abs % 100
+    return string.format("%s%dg %ds %dc", sign, g, s, c)
 end
 
 -- ============================================================
@@ -90,37 +96,18 @@ APT.RefreshPriceEstimator = function()
     local tc       = sess.totalCrafts
     local settings = APT.db.char.settings.priceEstimator
 
-    local lotPrice  = settings.lotPrice  or 0
-    local lotSize   = math.max(settings.lotSize or 1, 1)
+    local matCost   = settings.matCost   or 0
     local sellPrice = settings.sellPrice or 0
-    local useAHFee  = settings.ahFee ~= false   -- default true
+    local useAHFee  = settings.ahFee ~= false
 
-    -- Cost per individual craft attempt
-    local costPerCraft = lotPrice / lotSize
-    PE.costPerCraft:SetText(FormatGold(costPerCraft))
-
-    -- Effective sell price after AH cut
+    -- Silently apply AH cut when enabled (controlled via Settings page checkbox)
     local effectiveSell = useAHFee and (sellPrice * (1 - AH_FEE)) or sellPrice
 
-    -- Avg yield per craft attempt (1.0 when no data yet)
-    local avgYield = tc > 0 and (sess.totalPotions / tc) or 1.0
-    PE.avgYield:SetText(string.format("%.2fx", avgYield))
-
-    -- Effective sell price for one item after AH cut
-    PE.revPerCraft:SetText(FormatGold(effectiveSell))
-
-    -- Profit per craft: sell price (after AH) minus material cost per craft
-    local profitPerCraft = effectiveSell - costPerCraft
-    local pc = profitPerCraft >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
-    PE.profitPerCraft:SetText(FormatGold(profitPerCraft))
-    PE.profitPerCraft:SetTextColor(unpack(pc))
-
-    -- Session profit: all items sold minus all material cost
-    -- totalPotions naturally includes proc extras so procs increase revenue
-    local sessProfit = sess.totalPotions * effectiveSell - tc * costPerCraft
-    local sc = sessProfit >= 0 and {0.20, 0.85, 0.50} or {1, 0.27, 0.27}
-    PE.sessProfit:SetText(FormatGold(sessProfit))
-    PE.sessProfit:SetTextColor(unpack(sc))
+    -- Estimated profit: total output value minus total material cost
+    local estimatedProfit = sess.totalPotions * effectiveSell - tc * matCost
+    local color = estimatedProfit >= 0 and {0.20, 0.83, 0.60} or {0.97, 0.44, 0.44}   -- emerald-400 / red-400
+    PE.estimatedProfit:SetText(FormatGSCProfit(estimatedProfit))
+    PE.estimatedProfit:SetTextColor(unpack(color))
 end
 
 -- ============================================================
@@ -128,6 +115,9 @@ end
 -- ============================================================
 APT.TogglePriceEstimator = function()
     if not PE.panel then return end
+    -- Only toggle in session tab
+    if APT.frame and APT.frame._activeTab ~= "session" then return end
+
     local settings = APT.db.char.settings.priceEstimator
     local show     = not PE.panel:IsShown()
     settings.enabled = show
@@ -150,154 +140,120 @@ function APT.CreatePriceEstimatorPanel(parentFrame)
     local MakeDivider = APT.MakeDivider
     local OR          = APT.theme.OR
 
-    -- Sub-frame pinned to the bottom of the parent (sits above the resize grip)
     local panel = CreateFrame("Frame", nil, f)
     panel:SetPoint("BOTTOMLEFT",  f, "BOTTOMLEFT",   1,  1)
     panel:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1,  1)
     panel:SetHeight(PANEL_H)
     panel:Hide()
-    PE.panel = panel
+    PE.panel   = panel
+    f._pePanel = panel
 
     local curY = -4
 
-    MakeDivider(panel, M_PAD, curY, -M_PAD)
-    curY = curY - 10
-
-    -- Section title
-    local titleLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    titleLbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, curY)
-    titleLbl:SetText("Price Estimator")
-    titleLbl:SetTextColor(OR[1], OR[2], OR[3])
-    curY = curY - M_ROW_H
-
-    -- Gold input row factory
-    local function MakeGoldRow(label, dbKey, y)
+    -- G/S/C input row factory
+    local function MakeGSCRow(label, dbKey, y)
         local lbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, y)
         lbl:SetText(label)
-        lbl:SetTextColor(0.76, 0.76, 0.76)
+        lbl:SetTextColor(0.64, 0.64, 0.64)   -- neutral-400
 
-        local box = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
-        box:SetSize(78, 18)
-        box:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD - 14, y + 1)
-        box:SetAutoFocus(false)
-        box:SetMaxLetters(10)
+        -- Rightmost: copper
+        local cLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cLbl:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD, y)
+        cLbl:SetText("c")
+        cLbl:SetTextColor(0.45, 0.45, 0.45)   -- neutral-500
 
-        local saved = APT.db.char.settings.priceEstimator[dbKey] or 0
-        box:SetText(string.format("%.2f", saved / 10000))
+        local cBox = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+        cBox:SetSize(26, 18)
+        cBox:SetPoint("RIGHT", cLbl, "LEFT", -2, 1)
+        cBox:SetAutoFocus(false)
+        cBox:SetMaxLetters(2)
 
-        local function Commit()
-            local copper = ParseGoldInput(box:GetText())
-            if copper then
-                APT.db.char.settings.priceEstimator[dbKey] = copper
-                box:SetText(string.format("%.2f", copper / 10000))
-                APT.RefreshPriceEstimator()
-            else
-                local s = APT.db.char.settings.priceEstimator[dbKey] or 0
-                box:SetText(string.format("%.2f", s / 10000))
-            end
-            box:ClearFocus()
-        end
-        box:SetScript("OnEnterPressed", Commit)
-        box:SetScript("OnEscapePressed", function(self)
-            local s = APT.db.char.settings.priceEstimator[dbKey] or 0
-            self:SetText(string.format("%.2f", s / 10000))
-            self:ClearFocus()
-        end)
+        local sLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        sLbl:SetPoint("RIGHT", cBox, "LEFT", -3, -1)
+        sLbl:SetText("s")
+        sLbl:SetTextColor(0.64, 0.64, 0.64)   -- neutral-400
+
+        local sBox = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+        sBox:SetSize(26, 18)
+        sBox:SetPoint("RIGHT", sLbl, "LEFT", -2, 1)
+        sBox:SetAutoFocus(false)
+        sBox:SetMaxLetters(2)
 
         local gLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        gLbl:SetPoint("LEFT", box, "RIGHT", 2, 0)
+        gLbl:SetPoint("RIGHT", sBox, "LEFT", -3, -1)
         gLbl:SetText("g")
-        gLbl:SetTextColor(0.76, 0.76, 0.76)
+        gLbl:SetTextColor(0.98, 0.75, 0.14)   -- amber-400
 
-        return box
-    end
+        local gBox = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+        gBox:SetSize(42, 18)
+        gBox:SetPoint("RIGHT", gLbl, "LEFT", -2, 1)
+        gBox:SetAutoFocus(false)
+        gBox:SetMaxLetters(5)
 
-    -- Integer input row factory (for "Crafts / lot")
-    local function MakeIntRow(label, dbKey, y)
-        local lbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, y)
-        lbl:SetText(label)
-        lbl:SetTextColor(0.76, 0.76, 0.76)
-
-        local box = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
-        box:SetSize(78, 18)
-        box:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD - 14, y + 1)
-        box:SetAutoFocus(false)
-        box:SetMaxLetters(6)
-        box:SetNumeric(true)
-
-        local saved = APT.db.char.settings.priceEstimator[dbKey] or 1
-        box:SetText(tostring(math.max(1, math.floor(saved + 0.5))))
+        local function RevertFromDB()
+            local saved = APT.db.char.settings.priceEstimator[dbKey] or 0
+            local g, s, c = CopperToGSC(saved)
+            gBox:SetText(tostring(g))
+            sBox:SetText(tostring(s))
+            cBox:SetText(tostring(c))
+        end
+        RevertFromDB()
 
         local function Commit()
-            local n = ParseIntInput(box:GetText())
-            if n then
-                APT.db.char.settings.priceEstimator[dbKey] = n
-                box:SetText(tostring(n))
-                APT.RefreshPriceEstimator()
-            else
-                local s = APT.db.char.settings.priceEstimator[dbKey] or 1
-                box:SetText(tostring(math.max(1, math.floor(s + 0.5))))
-            end
-            box:ClearFocus()
+            local gv = tonumber(gBox:GetText()) or 0
+            local sv = tonumber(sBox:GetText()) or 0
+            local cv = tonumber(cBox:GetText()) or 0
+            local copper = GSCToCopper(gv, sv, cv)
+            APT.db.char.settings.priceEstimator[dbKey] = copper
+            local ng, ns, nc = CopperToGSC(copper)
+            gBox:SetText(tostring(ng))
+            sBox:SetText(tostring(ns))
+            cBox:SetText(tostring(nc))
+            gBox:ClearFocus()
+            sBox:ClearFocus()
+            cBox:ClearFocus()
+            APT.RefreshPriceEstimator()
         end
-        box:SetScript("OnEnterPressed", Commit)
-        box:SetScript("OnEscapePressed", function(self)
-            local s = APT.db.char.settings.priceEstimator[dbKey] or 1
-            self:SetText(tostring(math.max(1, math.floor(s + 0.5))))
-            self:ClearFocus()
-        end)
 
-        return box
+        local function Revert()
+            RevertFromDB()
+            gBox:ClearFocus()
+            sBox:ClearFocus()
+            cBox:ClearFocus()
+        end
+
+        for _, box in ipairs({gBox, sBox, cBox}) do
+            box:SetScript("OnEnterPressed", Commit)
+            box:SetScript("OnEscapePressed", Revert)
+        end
+
+        return gBox, sBox, cBox
     end
-
-    PE.lotPriceBox  = MakeGoldRow("Lot price:",       "lotPrice",  curY) ; curY = curY - M_ROW_H
-    PE.lotSizeBox   = MakeIntRow( "Crafts / lot:",    "lotSize",   curY) ; curY = curY - M_ROW_H
-    PE.sellPriceBox = MakeGoldRow("Sell price / item:","sellPrice", curY)
-    curY = curY - 6
-
-    -- AH Fee checkbox row
-    local ahLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    ahLbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, curY)
-    ahLbl:SetText("AH Fee (5%):")
-    ahLbl:SetTextColor(0.76, 0.76, 0.76)
-
-    local chk = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-    chk:SetSize(20, 20)
-    chk:SetPoint("RIGHT", panel, "RIGHT", -M_PAD - 2, curY + M_ROW_H / 2 - 3)
-    chk:SetChecked(APT.db.char.settings.priceEstimator.ahFee ~= false)
-    chk:SetScript("OnClick", function(self)
-        APT.db.char.settings.priceEstimator.ahFee = self:GetChecked()
-        APT.RefreshPriceEstimator()
-    end)
-    PE.ahFeeChk = chk
-    curY = curY - M_ROW_H - 2
 
     MakeDivider(panel, M_PAD, curY, -M_PAD)
     curY = curY - 10
 
-    -- Calculated row factory
-    local function MakeCalcRow(label, y)
-        local lbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, y)
-        lbl:SetText(label)
-        lbl:SetTextColor(0.60, 0.60, 0.60)
+    -- Figma: Material Cost row, Sell Price row
+    MakeGSCRow("Material Cost:", "matCost",   curY) ; curY = curY - M_ROW_H
+    MakeGSCRow("Sell Price:",    "sellPrice", curY)
+    curY = curY - 6
 
-        local val = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        val:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD, y)
-        val:SetJustifyH("RIGHT")
-        val:SetTextColor(1, 1, 1)
-        return val
-    end
+    -- Figma: divider, then Estimated Profit
+    MakeDivider(panel, M_PAD, curY, -M_PAD)
+    curY = curY - 10
 
-    PE.costPerCraft   = MakeCalcRow("Cost / craft:",     curY) ; curY = curY - M_ROW_H
-    PE.avgYield       = MakeCalcRow("Avg yield / craft:", curY) ; curY = curY - M_ROW_H
-    PE.revPerCraft    = MakeCalcRow("Sell (after AH):",   curY) ; curY = curY - M_ROW_H
-    PE.profitPerCraft = MakeCalcRow("Profit / craft:",    curY) ; curY = curY - M_ROW_H
-    PE.sessProfit     = MakeCalcRow("Session profit:",    curY)
+    local profLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    profLbl:SetPoint("TOPLEFT", panel, "TOPLEFT", M_PAD, curY)
+    profLbl:SetText("Estimated Profit:")
+    profLbl:SetTextColor(0.64, 0.64, 0.64)   -- neutral-400
 
-    -- Restore persisted state
+    local profVal = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    profVal:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -M_PAD, curY)
+    profVal:SetJustifyH("RIGHT")
+    PE.estimatedProfit = profVal
+
+    -- Restore persisted open/closed state
     if APT.db.char.settings.priceEstimator.enabled then
         panel:Show()
         APT.frame:SetHeight(APT.frame:GetHeight() + PANEL_H)
